@@ -12,6 +12,7 @@ const usage = `usage : night-shift <commande>
 
 Commandes :
   version   affiche la version du binaire
+  zones     check des zones sur le diff d'une PR d'agent
 `
 
 // Run exécute la commande désignée par args (sans le nom du binaire) et rend
@@ -26,6 +27,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		_, _ = fmt.Fprintln(stdout, version.Version)
 		return 0
+	case "zones":
+		return runZones(args[1:], stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "commande inconnue : %q\n\n%s", args[0], usage)
 		return 2

@@ -1,0 +1,11 @@
+version: 1
+trustLevel:
+  ticketsPerPass: 1
+  pullRequests: draft
+trustedAuthors: [alice]
+forbiddenZones:
+  - ".github/**"
+sensitiveZones:
+  - path: go.mod
+    kind: go-dependencies
+  - path: "deploy/**"

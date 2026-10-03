@@ -73,7 +73,7 @@ Status: **foundation in place, building the minimal pass.**
 
 - [x] Go foundation, CI and required checks ([#3](https://github.com/UnPoilTefal/night-shift/issues/3))
 - [ ] Minimal pass: selection and reservation, with a stubbed harness ([#4](https://github.com/UnPoilTefal/night-shift/issues/4))
-- [ ] Zone check: verdict on a PR diff ([#5](https://github.com/UnPoilTefal/night-shift/issues/5))
+- [x] Zone check: verdict on a PR diff, usable from any repository's CI ([#5](https://github.com/UnPoilTefal/night-shift/issues/5))
 - [ ] Real `claude -p` harness, with publication of a draft PR ([#6](https://github.com/UnPoilTefal/night-shift/issues/6))
 - [ ] Trusted-author filtering, digest, CI rounds, outcomes, container images ([#7](https://github.com/UnPoilTefal/night-shift/issues/7) to [#11](https://github.com/UnPoilTefal/night-shift/issues/11))
 
@@ -83,11 +83,12 @@ Status: **foundation in place, building the minimal pass.**
 
 ## Development
 
-There is nothing to deploy yet: the binary only knows `version` so far.
+There is nothing to deploy yet. The binary already provides the **zone check**, which an opted-in repository can run as a required check: see [`docs/opt-in.md`](docs/opt-in.md) for the opt-in schema and the GitHub Action.
 
 ```sh
 go build -o night-shift ./cmd/night-shift
 ./night-shift version     # "dev" unless injected with -ldflags
+./night-shift zones --base origin/main --head HEAD --head-ref agent/42-fix-typo
 go test -race ./...
 golangci-lint run ./...
 ```
@@ -98,6 +99,7 @@ Every pull request runs the same lint and tests in CI. Both are required checks 
 
 Design documents are written in French, using the glossary's French aliases.
 
+- [`docs/opt-in.md`](docs/opt-in.md): the opt-in schema and how to wire the zone check into a repository's CI.
 - [`CONTEXT.md`](CONTEXT.md): the glossary. Every term in **bold** in this README is defined there under its canonical English name, with its French alias (shown here in *italics*) used throughout the French design documents.
 - [`docs/adr/`](docs/adr/): architecture decisions, including the alternatives that were rejected.
 - [`docs/agents/`](docs/agents/): configuration for the agents working on this repository.
