@@ -9,8 +9,12 @@ linters:
     - unconvert
   exclusions:
     rules:
-      - path: (_test\.go|internal/testgit/)
+      - path: (_test\.go|internal/testgit/|test/)
         linters: [gosec]
+      # Ginkgo et Gomega s'importent par convention en dot import.
+      - path: _test\.go
+        linters: [revive]
+        text: dot-imports
 
 formatters:
   enable:

@@ -1,0 +1,10 @@
+# Une passe déclenchée à la main : elle s'exécute comme une passe planifiée.
+apiVersion: nightshift.unpoiltefal.github.io/v1alpha1
+kind: Pass
+metadata:
+  labels:
+    app.kubernetes.io/name: night-shift
+    app.kubernetes.io/managed-by: kustomize
+  name: team-tickets-manual
+spec:
+  shiftName: team-tickets

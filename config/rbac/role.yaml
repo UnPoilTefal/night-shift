@@ -1,0 +1,51 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - nightshift.unpoiltefal.github.io
+  resources:
+  - passes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - nightshift.unpoiltefal.github.io
+  resources:
+  - passes/finalizers
+  - shifts/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - nightshift.unpoiltefal.github.io
+  resources:
+  - passes/status
+  - shifts/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - nightshift.unpoiltefal.github.io
+  resources:
+  - shifts
+  verbs:
+  - get
+  - list
+  - watch
