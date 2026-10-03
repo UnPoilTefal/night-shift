@@ -79,7 +79,8 @@ Status: **the pass selects, reserves and hands back real tickets; no agent is pl
 
 **Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
 
-- [ ] The Kubernetes operator in ten increments, from mocked plumbing (a hello-world container) up to an agent with context, harness and tools ([#13](https://github.com/UnPoilTefal/night-shift/issues/13) to [#22](https://github.com/UnPoilTefal/night-shift/issues/22))
+- [x] Increment 0: `Shift` and `Pass` custom resources, a scheduled pass per cron occurrence, one active pass per shift, a hardened orchestrator Job ([#13](https://github.com/UnPoilTefal/night-shift/issues/13))
+- [ ] Increments 1 to 9, from a fake ticket source and one Job per ticket up to an agent with context, harness and tools ([#14](https://github.com/UnPoilTefal/night-shift/issues/14) to [#22](https://github.com/UnPoilTefal/night-shift/issues/22))
 
 ## Development
 
@@ -90,9 +91,37 @@ go build -o night-shift ./cmd/night-shift
 ./night-shift version     # "dev" unless injected with -ldflags
 ./night-shift zones --base origin/main --head HEAD --head-ref agent/42-fix-typo
 NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift pass --repo owner/repo   # repositories without an opt-in are skipped
-go test -race ./...
-golangci-lint run ./...
+make test                 # unit and envtest suites
+make lint
 ```
+
+### Operator preview
+
+A team declares a **Shift** (*poste*) in its namespace; the operator turns each cron occurrence into a **Pass** (*passe*) and each pass into an orchestrator Job. At this stage the Job is a placeholder that only prints the pass name, but it already runs under the `restricted` pod security standard.
+
+```yaml
+apiVersion: nightshift.unpoiltefal.github.io/v1alpha1
+kind: Shift
+metadata:
+  name: team-tickets
+spec:
+  trigger:
+    schedule: {cron: "0 2 * * *", timeZone: Europe/Paris}
+  mission:
+    tickets:
+      source:
+        fake: {configMapName: tickets-demo}
+```
+
+Try it on a throwaway [kind](https://kind.sigs.k8s.io/) cluster. It uses its own kubeconfig (`bin/kind.kubeconfig`), never your current context:
+
+```sh
+make kind-up kind-deploy kind-samples
+KUBECONFIG=bin/kind.kubeconfig kubectl -n night-shift-demo get shifts,passes,jobs
+make kind-down
+```
+
+`make test-e2e` runs the same scenario end to end in CI.
 
 Every pull request runs the same lint and tests in CI. Both are required checks on `main`.
 
