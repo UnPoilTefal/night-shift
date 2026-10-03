@@ -1,0 +1,59 @@
+name: night-shift zone check
+description: >-
+  Blocks agent PRs that touch a forbidden zone and flags those that touch a
+  sensitive zone, using the opt-in declared on the base branch.
+
+inputs:
+  base:
+    description: Base revision (the opt-in is read from it).
+    default: ${{ github.event.pull_request.base.sha }}
+  head:
+    description: Head revision of the pull request.
+    default: ${{ github.event.pull_request.head.sha }}
+  head-ref:
+    description: Head branch name. Only agent/ branches are checked.
+    default: ${{ github.head_ref }}
+
+outputs:
+  verdict:
+    description: pass, flag, block, or error.
+    value: ${{ steps.check.outputs.verdict }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: ${{ github.action_path }}/../../go.mod
+        cache-dependency-path: ${{ github.action_path }}/../../go.sum
+
+    - name: Build night-shift
+      shell: bash
+      working-directory: ${{ github.action_path }}/../..
+      run: go build -o "$RUNNER_TEMP/night-shift" ./cmd/night-shift
+
+    - name: Zone check
+      id: check
+      shell: bash
+      env:
+        BASE: ${{ inputs.base }}
+        HEAD: ${{ inputs.head }}
+        HEAD_REF: ${{ inputs.head-ref }}
+      run: |
+        set +e
+        "$RUNNER_TEMP/night-shift" zones --base "$BASE" --head "$HEAD" --head-ref "$HEAD_REF" > "$RUNNER_TEMP/zones.txt"
+        code=$?
+        set -e
+        cat "$RUNNER_TEMP/zones.txt"
+        verdict=$(sed -n 's/^verdict: //p' "$RUNNER_TEMP/zones.txt" | head -n 1)
+        echo "verdict=${verdict:-error}" >> "$GITHUB_OUTPUT"
+        {
+          echo '### night-shift zone check'
+          echo '```'
+          cat "$RUNNER_TEMP/zones.txt"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ "$verdict" = flag ]; then
+          echo "::warning title=night-shift zone check::This agent PR touches a sensitive zone and needs a human decision."
+        fi
+        exit "$code"
