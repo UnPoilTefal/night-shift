@@ -20,6 +20,10 @@ type Issue struct {
 
 // Forge est une forge en mémoire, sûre en accès concurrent.
 type Forge struct {
+	// Fail, s'il est renseigné, est appelé avant chaque opération avec son
+	// nom ; une erreur rendue fait échouer l'opération (pannes simulées).
+	Fail func(op string) error
+
 	mu     sync.Mutex
 	files  map[string]map[string][]byte
 	issues map[string][]*Issue
@@ -62,7 +66,10 @@ func (f *Forge) Issue(repo string, number int) Issue {
 }
 
 // ReadyTickets implémente forge.Forge.
-func (f *Forge) ReadyTickets(_ context.Context, repo string) ([]forge.Ticket, error) {
+func (f *Forge) ReadyTickets(ctx context.Context, repo string) ([]forge.Ticket, error) {
+	if err := f.hook(ctx, "ReadyTickets"); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var ts []forge.Ticket
@@ -77,7 +84,10 @@ func (f *Forge) ReadyTickets(_ context.Context, repo string) ([]forge.Ticket, er
 }
 
 // File implémente forge.Forge.
-func (f *Forge) File(_ context.Context, repo, path string) ([]byte, bool, error) {
+func (f *Forge) File(ctx context.Context, repo, path string) ([]byte, bool, error) {
+	if err := f.hook(ctx, "File"); err != nil {
+		return nil, false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	data, ok := f.files[repo][path]
@@ -85,7 +95,10 @@ func (f *Forge) File(_ context.Context, repo, path string) ([]byte, bool, error)
 }
 
 // AddLabel implémente forge.Forge.
-func (f *Forge) AddLabel(_ context.Context, repo string, number int, label string) error {
+func (f *Forge) AddLabel(ctx context.Context, repo string, number int, label string) error {
+	if err := f.hook(ctx, "AddLabel"); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	i := f.find(repo, number)
@@ -99,7 +112,10 @@ func (f *Forge) AddLabel(_ context.Context, repo string, number int, label strin
 }
 
 // RemoveLabel implémente forge.Forge.
-func (f *Forge) RemoveLabel(_ context.Context, repo string, number int, label string) error {
+func (f *Forge) RemoveLabel(ctx context.Context, repo string, number int, label string) error {
+	if err := f.hook(ctx, "RemoveLabel"); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	i := f.find(repo, number)
@@ -111,7 +127,10 @@ func (f *Forge) RemoveLabel(_ context.Context, repo string, number int, label st
 }
 
 // Comment implémente forge.Forge.
-func (f *Forge) Comment(_ context.Context, repo string, number int, body string) error {
+func (f *Forge) Comment(ctx context.Context, repo string, number int, body string) error {
+	if err := f.hook(ctx, "Comment"); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	i := f.find(repo, number)
@@ -119,6 +138,18 @@ func (f *Forge) Comment(_ context.Context, repo string, number int, body string)
 		return fmt.Errorf("ticket %s#%d inconnu", repo, number)
 	}
 	i.Comments = append(i.Comments, body)
+	return nil
+}
+
+// hook simule le comportement d'une vraie forge : un contexte annulé fait
+// échouer l'appel, comme une panne injectée par Fail.
+func (f *Forge) hook(ctx context.Context, op string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if f.Fail != nil {
+		return f.Fail(op)
+	}
 	return nil
 }
 
