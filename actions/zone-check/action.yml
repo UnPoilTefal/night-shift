@@ -1,6 +1,6 @@
 name: night-shift zone check
 description: >-
-  Blocks agent PRs that touch a forbidden zone and flags those that touch a
+  Run it under pull_request_target (see docs/opt-in.md). Blocks agent PRs that touch a forbidden zone and flags those that touch a
   sensitive zone, using the opt-in declared on the base branch.
 
 inputs:
@@ -26,6 +26,15 @@ runs:
       with:
         go-version-file: ${{ github.action_path }}/../../go.mod
         cache-dependency-path: ${{ github.action_path }}/../../go.sum
+
+    - name: Fetch the PR head
+      # Under pull_request_target the checkout is the base branch; the PR's
+      # commits are fetched as objects only and never checked out.
+      if: github.event.pull_request.number != ''
+      shell: bash
+      env:
+        PR: ${{ github.event.pull_request.number }}
+      run: git fetch --no-tags origin "+refs/pull/${PR}/head:refs/remotes/night-shift/pr-head"
 
     - name: Build night-shift
       shell: bash
