@@ -2,9 +2,11 @@
 
 **Your ready tickets move forward overnight. In the morning, you review draft PRs instead of babysitting agents.**
 
+[![CI](https://github.com/UnPoilTefal/night-shift/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/UnPoilTefal/night-shift/actions/workflows/ci.yml)
+[![Go version](https://img.shields.io/github/go-mod/go-version/UnPoilTefal/night-shift)](go.mod)
 [![MIT License](https://img.shields.io/github/license/UnPoilTefal/night-shift)](LICENSE)
 [![Renovate](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot)](https://github.com/UnPoilTefal/night-shift/issues/1)
-[![Status](https://img.shields.io/badge/status-design%20complete-orange)](#roadmap)
+[![Status](https://img.shields.io/badge/status-in%20development-yellow)](#roadmap)
 [![Decisions](https://img.shields.io/badge/decisions-ADR-blue)](docs/adr/)
 [![Glossary](https://img.shields.io/badge/glossary-CONTEXT.md-blue)](CONTEXT.md)
 
@@ -64,10 +66,32 @@ A repository's **trust level** (*palier de confiance*: tickets per pass, draft o
 
 ## Roadmap
 
-Status: **design complete, implementation starting.**
+Status: **foundation in place, building the minimal pass.**
 
-- [Solo tier spec](https://github.com/UnPoilTefal/night-shift/issues/2): Go foundation, minimal pass, zone check, `claude -p` harness, digest.
-- [Platform tier spec](https://github.com/UnPoilTefal/night-shift/issues/12): the operator, in ten increments, from mocked plumbing (a hello-world container) up to an agent with context, harness and tools.
+**Solo tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/2))
+
+- [x] Go foundation, CI and required checks ([#3](https://github.com/UnPoilTefal/night-shift/issues/3))
+- [ ] Minimal pass: selection and reservation, with a stubbed harness ([#4](https://github.com/UnPoilTefal/night-shift/issues/4))
+- [ ] Zone check: verdict on a PR diff ([#5](https://github.com/UnPoilTefal/night-shift/issues/5))
+- [ ] Real `claude -p` harness, with publication of a draft PR ([#6](https://github.com/UnPoilTefal/night-shift/issues/6))
+- [ ] Trusted-author filtering, digest, CI rounds, outcomes, container images ([#7](https://github.com/UnPoilTefal/night-shift/issues/7) to [#11](https://github.com/UnPoilTefal/night-shift/issues/11))
+
+**Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
+
+- [ ] The Kubernetes operator in ten increments, from mocked plumbing (a hello-world container) up to an agent with context, harness and tools ([#13](https://github.com/UnPoilTefal/night-shift/issues/13) to [#22](https://github.com/UnPoilTefal/night-shift/issues/22))
+
+## Development
+
+There is nothing to deploy yet: the binary only knows `version` so far.
+
+```sh
+go build -o night-shift ./cmd/night-shift
+./night-shift version     # "dev" unless injected with -ldflags
+go test -race ./...
+golangci-lint run ./...
+```
+
+Every pull request runs the same lint and tests in CI. Both are required checks on `main`.
 
 ## Documentation
 
