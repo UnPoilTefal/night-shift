@@ -67,12 +67,12 @@ A repository's **trust level** (*palier de confiance*: tickets per pass, draft o
 
 ## Roadmap
 
-Status: **foundation in place, building the minimal pass.**
+Status: **the pass selects, reserves and hands back real tickets; no agent is plugged in yet.**
 
 **Solo tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/2))
 
 - [x] Go foundation, CI and required checks ([#3](https://github.com/UnPoilTefal/night-shift/issues/3))
-- [ ] Minimal pass: selection and reservation, with a stubbed harness ([#4](https://github.com/UnPoilTefal/night-shift/issues/4))
+- [x] Minimal pass: selection and reservation, with a stubbed harness ([#4](https://github.com/UnPoilTefal/night-shift/issues/4))
 - [x] Zone check: verdict on a PR diff, usable from any repository's CI ([#5](https://github.com/UnPoilTefal/night-shift/issues/5))
 - [ ] Real `claude -p` harness, with publication of a draft PR ([#6](https://github.com/UnPoilTefal/night-shift/issues/6))
 - [ ] Trusted-author filtering, digest, CI rounds, outcomes, container images ([#7](https://github.com/UnPoilTefal/night-shift/issues/7) to [#11](https://github.com/UnPoilTefal/night-shift/issues/11))
@@ -83,12 +83,13 @@ Status: **foundation in place, building the minimal pass.**
 
 ## Development
 
-There is nothing to deploy yet. The binary already provides the **zone check**, which an opted-in repository can run as a required check: see [`docs/opt-in.md`](docs/opt-in.md) for the opt-in schema and the GitHub Action.
+There is nothing to deploy yet. The binary already runs a **minimal pass** (selection, reservation, hand-back to a human, with a stubbed agent) and provides the **zone check**, which an opted-in repository can run as a required check: see [`docs/opt-in.md`](docs/opt-in.md) for the opt-in schema and the GitHub Action.
 
 ```sh
 go build -o night-shift ./cmd/night-shift
 ./night-shift version     # "dev" unless injected with -ldflags
 ./night-shift zones --base origin/main --head HEAD --head-ref agent/42-fix-typo
+NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift pass --repo owner/repo   # repositories without an opt-in are skipped
 go test -race ./...
 golangci-lint run ./...
 ```
