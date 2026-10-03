@@ -39,6 +39,11 @@ const waitRequeue = 15 * time.Second
 // introuvable échoue.
 const shiftWaitTimeout = 2 * time.Minute
 
+// passDeadline borne la durée d'un Job orchestrateur, y compris un pod qui ne
+// démarre jamais : sans elle, la passe resterait active et bloquerait son
+// poste. Elle reprend la durée maximale de passe par défaut de la spec.
+const passDeadline = 30 * time.Minute
+
 // PassReconciler traduit une passe en Job orchestrateur et reporte l'état du
 // Job dans celui de la passe.
 type PassReconciler struct {
@@ -179,7 +184,8 @@ func (r *PassReconciler) createJob(ctx context.Context, pass *nightshiftv1alpha1
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: pass.Name, Namespace: pass.Namespace, Labels: labels},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: ptr.To[int32](0),
+			BackoffLimit:          ptr.To[int32](0),
+			ActiveDeadlineSeconds: ptr.To(int64(passDeadline / time.Second)),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{

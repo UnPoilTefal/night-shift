@@ -29,9 +29,12 @@ import (
 // ConditionReady est vrai quand le déclencheur du poste est planifiable.
 const ConditionReady = "Ready"
 
-// maxMissedSchedules borne le rattrapage des échéances manquées : seule la
-// plus récente donne lieu à une passe, comme pour un CronJob.
-const maxMissedSchedules = 10000
+// catchUpWindows sert à retrouver la plus récente échéance manquée sans
+// parcourir toutes celles écoulées depuis la dernière passe : on cherche
+// d'abord dans la dernière minute, puis l'heure, le jour…
+var catchUpWindows = []time.Duration{
+	time.Minute, time.Hour, 24 * time.Hour, 31 * 24 * time.Hour, 366 * 24 * time.Hour, 5 * 366 * 24 * time.Hour,
+}
 
 // ShiftReconciler traduit un poste en passes : une passe par échéance du
 // déclencheur, jamais deux actives à la fois, avec un historique borné.
@@ -78,6 +81,14 @@ func (r *ShiftReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		last = shift.Status.LastScheduleTime.Time
 	}
 	due, next := dueAndNext(schedule, loc, last, now)
+	if next.IsZero() {
+		meta.SetStatusCondition(&shift.Status.Conditions, metav1.Condition{
+			Type: ConditionReady, Status: metav1.ConditionFalse, Reason: "InvalidSchedule",
+			Message: "cron " + shift.Spec.Trigger.Schedule.Cron + " never fires", ObservedGeneration: shift.Generation,
+		})
+		shift.Status.NextScheduleTime = nil
+		return ctrl.Result{}, r.Status().Update(ctx, &shift)
+	}
 
 	if !due.IsZero() {
 		if active == nil {
@@ -131,18 +142,27 @@ func parseSchedule(s *nightshiftv1alpha1.ScheduleTrigger) (cron.Schedule, *time.
 	return sched, loc, nil
 }
 
-// dueAndNext rend la plus récente échéance passée depuis last (zéro s'il n'y
-// en a pas) et la prochaine échéance après now.
+// dueAndNext rend la plus récente échéance de (last, now], zéro s'il n'y en a
+// pas : seule celle-ci donne lieu à une passe, comme pour un CronJob. Elle
+// rend aussi la prochaine échéance après now, zéro si le cron ne se déclenche
+// plus jamais (par exemple un 30 février).
 func dueAndNext(s cron.Schedule, loc *time.Location, last, now time.Time) (due, next time.Time) {
-	t := s.Next(last.In(loc))
-	for i := 0; !t.After(now) && i < maxMissedSchedules; i++ {
+	next = s.Next(now.In(loc))
+	start := last
+	for _, w := range catchUpWindows {
+		c := now.Add(-w)
+		if !c.After(last) {
+			break
+		}
+		if t := s.Next(c.In(loc)); !t.IsZero() && !t.After(now) {
+			start = c
+			break
+		}
+	}
+	for t := s.Next(start.In(loc)); !t.IsZero() && !t.After(now); t = s.Next(t) {
 		due = t
-		t = s.Next(t)
 	}
-	for !t.After(now) {
-		t = s.Next(t)
-	}
-	return due, t
+	return due, next
 }
 
 func (r *ShiftReconciler) passesOf(ctx context.Context, shift *nightshiftv1alpha1.Shift) ([]nightshiftv1alpha1.Pass, error) {

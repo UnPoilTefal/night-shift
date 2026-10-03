@@ -94,6 +94,7 @@ var _ = Describe("Pass controller", func() {
 
 		job, err := getJob(ns, "manual")
 		Expect(err).NotTo(HaveOccurred())
+		Expect(*job.Spec.ActiveDeadlineSeconds).To(Equal(int64(passDeadline / time.Second)))
 		pod := job.Spec.Template.Spec
 		Expect(*pod.AutomountServiceAccountToken).To(BeFalse())
 		Expect(*pod.SecurityContext.RunAsNonRoot).To(BeTrue())
