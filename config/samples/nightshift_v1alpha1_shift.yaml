@@ -1,0 +1,19 @@
+# Un poste de démonstration : une passe par minute, sur une source de tickets
+# factice. En usage réel, une passe par nuit ("0 2 * * *") suffit.
+apiVersion: nightshift.unpoiltefal.github.io/v1alpha1
+kind: Shift
+metadata:
+  labels:
+    app.kubernetes.io/name: night-shift
+    app.kubernetes.io/managed-by: kustomize
+  name: team-tickets
+spec:
+  trigger:
+    schedule:
+      cron: "* * * * *"
+      timeZone: Europe/Paris
+  mission:
+    tickets:
+      source:
+        fake:
+          configMapName: tickets-demo

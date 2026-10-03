@@ -37,11 +37,28 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Tests
-        run: go test -race ./...
+      - name: Tests (unitaires et envtest)
+        run: make test
+      - name: Code et manifestes générés à jour
+        run: git diff --exit-code
       - name: Build avec version injectée
         env:
           VERSION: ci-${{ github.sha }}
         run: |
           go build -ldflags "-X github.com/UnPoilTefal/night-shift/internal/version.Version=${VERSION}" -o night-shift ./cmd/night-shift
           test "$(./night-shift version)" = "${VERSION}"
+
+  e2e:
+    name: E2E (kind)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Installer kind
+        run: go install sigs.k8s.io/kind@v0.33.0
+      - name: Tests de bout en bout
+        run: make test-e2e

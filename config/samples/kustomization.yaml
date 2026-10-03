@@ -1,0 +1,5 @@
+## Append samples of your project ##
+resources:
+- nightshift_v1alpha1_shift.yaml
+- nightshift_v1alpha1_pass.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
