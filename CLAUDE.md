@@ -6,6 +6,8 @@ Vocabulaire : `CONTEXT.md`. Décisions : `docs/adr/`.
 
 Nommage (ADR 0006) : le code, les ressources Kubernetes et la doc anglaise utilisent le nom canonique anglais d'un terme ; la prose française (ADR, specs, tickets) utilise son alias `_FR_`.
 
+README : à chaque ticket traité, mettre à jour `README.md` (en anglais) dans la même PR, pour qu'il reste exact et vendeur : cocher l'étape de la feuille de route, ajuster le statut et ses badges, documenter ce qui devient utilisable (commandes, exemples, schéma). Aucun badge cassé et aucune promesse non livrée.
+
 ## Agent skills
 
 ### Issue tracker
