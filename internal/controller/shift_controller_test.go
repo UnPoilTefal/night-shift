@@ -166,6 +166,18 @@ var _ = Describe("Shift controller", func() {
 		Expect(err).To(MatchError(ContainSubstring("exactly one ticket source must be set")))
 	})
 
+	It("reports a cron that never fires instead of looping", func() {
+		createShift(ns, "february", shiftSpec("0 0 30 2 *"))
+		reconcileShift(testclock.NewFakePassiveClock(time.Now()), ns, "february")
+
+		var shift nightshiftv1alpha1.Shift
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "february"}, &shift)).To(Succeed())
+		cond := meta.FindStatusCondition(shift.Status.Conditions, ConditionReady)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Reason).To(Equal("InvalidSchedule"))
+		Expect(cond.Message).To(ContainSubstring("never fires"))
+	})
+
 	It("reports an invalid cron expression without creating passes", func() {
 		createShift(ns, "broken", shiftSpec("every night"))
 		reconcileShift(testclock.NewFakePassiveClock(time.Now().Add(48*time.Hour)), ns, "broken")
