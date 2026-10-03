@@ -12,6 +12,7 @@ const usage = `usage : night-shift <commande>
 
 Commandes :
   version   affiche la version du binaire
+  pass      lance une passe sur les tickets prêts des dépôts candidats
   zones     check des zones sur le diff d'une PR d'agent
 `
 
@@ -27,6 +28,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "version":
 		_, _ = fmt.Fprintln(stdout, version.Version)
 		return 0
+	case "pass":
+		return runPass(args[1:], stdout, stderr)
 	case "zones":
 		return runZones(args[1:], stdout, stderr)
 	default:
