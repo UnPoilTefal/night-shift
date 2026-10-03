@@ -4,6 +4,8 @@ Passes planifiées d'agents IA sur les tickets prêts d'un issue tracker. Cadre 
 
 Vocabulaire : `CONTEXT.md`. Décisions : `docs/adr/`.
 
+Nommage (ADR 0006) : le code, les ressources Kubernetes et la doc anglaise utilisent le nom canonique anglais d'un terme ; la prose française (ADR, specs, tickets) utilise son alias `_FR_`.
+
 ## Agent skills
 
 ### Issue tracker
