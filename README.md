@@ -50,7 +50,7 @@ An agent treats whatever it reads as instructions, and a ticket may carry a prom
 | Two agents on the same ticket | Serialized passes and reservation | [ADR 0001](docs/adr/0001-passes-planifiees-serialisees.md) |
 | The agent merges or approves | Service identity holds a strict subset of the team's rights | [ADR 0003](docs/adr/0003-identite-sous-ensemble-des-droits.md) |
 
-A repository is opened to passes only through an **opt-in file** (*Adhésion*), versioned in the repository itself and protected as a forbidden zone. The repository must also be able to enforce required checks.
+A repository is opened to passes only through an **opt-in** (*Adhésion*): a file versioned in the repository itself and protected as a forbidden zone. The repository must also be able to enforce required checks.
 
 ## Three tiers
 
@@ -71,9 +71,9 @@ Status: **design complete, implementation starting.**
 
 ## Documentation
 
-Design documents are written in French.
+Design documents are written in French, using the glossary's French aliases.
 
-- [`CONTEXT.md`](CONTEXT.md): the glossary. Every term in **bold** (or *italic French* in parentheses) in this README is defined there.
+- [`CONTEXT.md`](CONTEXT.md): the glossary. Every term in **bold** in this README is defined there under its canonical English name, with its French alias (shown here in *italics*) used throughout the French design documents.
 - [`docs/adr/`](docs/adr/): architecture decisions, including the alternatives that were rejected.
 - [`docs/agents/`](docs/agents/): configuration for the agents working on this repository.
 
