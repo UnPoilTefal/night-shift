@@ -57,6 +57,8 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"champ inconnu":      {valid + "autoMerge: true\n", "autoMerge"},
 		"motif invalide":     {strings.Replace(valid, `".github/**"`, `"[.github"`, 1), "motif invalide"},
 		"motif absolu":       {strings.Replace(valid, `".github/**"`, `"/etc/**"`, 1), "motif absolu"},
+		"motif en ./":        {strings.Replace(valid, `".github/**"`, `"./.github/**"`, 1), "segment"},
+		"motif avec ..":      {strings.Replace(valid, `".github/**"`, `"docs/../.github/**"`, 1), "segment"},
 		"kind inconnu":       {strings.Replace(valid, "kind: go-dependencies", "kind: npm", 1), "kind"},
 		"document vide":      {"", "illisible"},
 		"yaml cassé":         {"version: [", "illisible"},

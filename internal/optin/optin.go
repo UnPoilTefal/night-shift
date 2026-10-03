@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -132,6 +133,11 @@ func validatePattern(field, p string) error {
 	}
 	if strings.HasPrefix(p, "/") {
 		return fmt.Errorf("%s %q : motif absolu, attendu un chemin relatif à la racine du dépôt", field, p)
+	}
+	// git rend des chemins sans « ./ » ni « .. » : un tel motif ne
+	// correspondrait jamais et la zone serait ignorée sans bruit.
+	if strings.HasPrefix(p, "./") || slices.Contains(strings.Split(p, "/"), "..") || slices.Contains(strings.Split(p, "/"), ".") {
+		return fmt.Errorf("%s %q : segment « . » ou « .. » interdit, écrire le chemin tel que git le rend (ex. .github/**)", field, p)
 	}
 	if !doublestar.ValidatePattern(p) {
 		return fmt.Errorf("%s %q : motif invalide", field, p)

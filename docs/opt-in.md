@@ -52,7 +52,10 @@ Only agent PRs, whose branch starts with `agent/`, are checked. Other PRs pass, 
 name: night-shift
 
 on:
-  pull_request:
+  # pull_request_target runs this workflow as it is on the base branch: an agent
+  # PR cannot rewrite the job that judges it. It is safe here because the check
+  # never runs code from the PR, it only reads git objects.
+  pull_request_target:
 
 permissions:
   contents: read
@@ -62,14 +65,15 @@ jobs:
     name: Zone check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7     # checks out the base branch
         with:
           fetch-depth: 0              # the check needs the base and the merge-base
-          persist-credentials: false
       - uses: UnPoilTefal/night-shift/actions/zone-check@<commit-sha>
 ```
 
-Then make **Zone check** a required status check on the default branch. A repository that cannot enforce required checks cannot opt in (ADR 0002).
+Then make **Zone check** a required status check on the default branch, and keep `.github/**` in `forbiddenZones`. A repository that cannot enforce required checks cannot opt in (ADR 0002).
+
+**Do not use `pull_request`**: with that trigger GitHub runs the workflow file from the PR itself, so an agent PR could replace the check with one that always passes. Never add a step that builds or runs the PR's code to this workflow either: under `pull_request_target`, that code would run with the base branch's privileges.
 
 ### From the command line
 
