@@ -198,3 +198,78 @@ func TestSucceededTicketLeavesNoAgentLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestFailedReservationPutsTicketBackInQueue(t *testing.T) {
+	f := memforge.New()
+	f.SetFile("o/a", optin.Path, optIn)
+	f.AddIssue(ticket("o/a", 1, day(1)))
+	f.Fail = func(op string) error {
+		if op == "Comment" {
+			return errors.New("HTTP 502")
+		}
+		return nil
+	}
+	h := stopped()
+
+	_, err := pass.Run(context.Background(), pass.Config{
+		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
+	}, f, h)
+
+	if err == nil {
+		t.Fatal("erreur attendue")
+	}
+	i := f.Issue("o/a", 1)
+	if !slices.Contains(i.Labels, forge.LabelReady) || slices.Contains(i.Labels, forge.LabelInProgress) {
+		t.Fatalf("labels = %v, attendu le ticket remis en file", i.Labels)
+	}
+	if len(h.seen) != 0 {
+		t.Fatal("le harness ne doit pas tourner sur une réservation ratée")
+	}
+}
+
+// cancellingHarness annule le contexte de la passe, comme un arrêt par
+// signal ou un dépassement de durée pendant le travail de l'agent.
+type cancellingHarness struct{ cancel context.CancelFunc }
+
+func (h cancellingHarness) Run(ctx context.Context, _ forge.Ticket) (harness.Result, error) {
+	h.cancel()
+	return harness.Result{}, ctx.Err()
+}
+
+func TestCancelledPassStillHandsTicketBack(t *testing.T) {
+	f := memforge.New()
+	f.SetFile("o/a", optin.Path, optIn)
+	f.AddIssue(ticket("o/a", 1, day(1)))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := pass.Run(ctx, pass.Config{
+		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
+	}, f, cancellingHarness{cancel})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := f.Issue("o/a", 1)
+	if !slices.Contains(i.Labels, forge.LabelHuman) || slices.Contains(i.Labels, forge.LabelInProgress) {
+		t.Fatalf("labels = %v, attendu ready-for-human malgré l'annulation", i.Labels)
+	}
+}
+
+func TestDuplicateReposAreProcessedOnce(t *testing.T) {
+	f := memforge.New()
+	f.SetFile("o/a", optin.Path, strings.Replace(optIn, "ticketsPerPass: 1", "ticketsPerPass: 5", 1))
+	f.AddIssue(ticket("o/a", 1, day(1)))
+	h := stopped()
+
+	r, err := pass.Run(context.Background(), pass.Config{
+		Repos: []string{"o/a", "O/A", "o/a"}, MaxTickets: 5, ID: "pass-test", Now: func() time.Time { return now },
+	}, f, h)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.seen) != 1 || len(r.Repos) != 1 {
+		t.Fatalf("tickets traités = %v, dépôts = %+v, attendu un seul passage", h.seen, r.Repos)
+	}
+}

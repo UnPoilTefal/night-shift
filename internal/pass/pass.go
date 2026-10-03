@@ -70,7 +70,7 @@ func Run(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness) (Rep
 	var queue []forge.Ticket
 	perRepoCap := map[string]int{}
 
-	for _, repo := range cfg.Repos {
+	for _, repo := range dedupe(cfg.Repos) {
 		o, rr := readOptIn(ctx, f, repo)
 		r.Repos = append(r.Repos, rr)
 		if rr.Status != Eligible {
@@ -142,10 +142,16 @@ func priority(t forge.Ticket) int {
 	return best
 }
 
+// cleanupTimeout borne les appels à la forge qui rendent un ticket : ils
+// doivent aboutir même si la passe a été annulée ou a dépassé sa durée.
+const cleanupTimeout = time.Minute
+
 // process réserve un ticket, le confie au harness et le rend dans un état
-// explicite : aucun ticket ne reste en agent-in-progress.
+// explicite : aucun ticket ne reste en agent-in-progress, sauf si la forge
+// refuse aussi le rendu, ce que l'erreur signale.
 func process(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, t forge.Ticket) (TicketReport, error) {
 	if err := reserve(ctx, cfg, f, t); err != nil {
+		rollback(ctx, f, t)
 		return TicketReport{}, fmt.Errorf("réservation de %s#%d : %w", t.Repo, t.Number, err)
 	}
 
@@ -157,6 +163,8 @@ func process(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, 
 	var label, comment string
 	switch res.Outcome {
 	case harness.Succeeded:
+		// Machine d'états de la spec : en cas de succès, le ticket est relié
+		// à sa PR en brouillon et ne porte plus de label de cycle de vie.
 		comment = fmt.Sprintf("night-shift (passe %s) : travail terminé. %s", cfg.ID, res.Reason)
 	case harness.Stopped:
 		label = forge.LabelHuman
@@ -167,8 +175,10 @@ func process(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, 
 		comment = fmt.Sprintf("night-shift (passe %s) : traitement interrompu, ticket rendu à un humain.\n\nCause : %s", cfg.ID, res.Reason)
 	}
 
-	if err := release(ctx, f, t, label, comment); err != nil {
-		return TicketReport{}, fmt.Errorf("rendu de %s#%d : %w", t.Repo, t.Number, err)
+	cctx, cancel := cleanupContext(ctx)
+	defer cancel()
+	if err := release(cctx, f, t, label, comment); err != nil {
+		return TicketReport{}, fmt.Errorf("rendu de %s#%d, le ticket peut rester en %s : %w", t.Repo, t.Number, forge.LabelInProgress, err)
 	}
 	return TicketReport{Repo: t.Repo, Number: t.Number, Title: t.Title, Outcome: res.Outcome, Reason: res.Reason}, nil
 }
@@ -184,6 +194,15 @@ func reserve(ctx context.Context, cfg Config, f forge.Forge, t forge.Ticket) err
 		"night-shift : ticket réservé par la passe %s le %s.", cfg.ID, cfg.Now().UTC().Format(time.RFC3339)))
 }
 
+// rollback remet au mieux un ticket dans la file après une réservation
+// partielle ; ses erreurs sont ignorées, celle de la réservation fait foi.
+func rollback(ctx context.Context, f forge.Forge, t forge.Ticket) {
+	cctx, cancel := cleanupContext(ctx)
+	defer cancel()
+	_ = f.AddLabel(cctx, t.Repo, t.Number, forge.LabelReady)
+	_ = f.RemoveLabel(cctx, t.Repo, t.Number, forge.LabelInProgress)
+}
+
 func release(ctx context.Context, f forge.Forge, t forge.Ticket, label, comment string) error {
 	if label != "" {
 		if err := f.AddLabel(ctx, t.Repo, t.Number, label); err != nil {
@@ -194,4 +213,23 @@ func release(ctx context.Context, f forge.Forge, t forge.Ticket, label, comment 
 		return err
 	}
 	return f.Comment(ctx, t.Repo, t.Number, comment)
+}
+
+func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+}
+
+// dedupe retire les dépôts en double, sans tenir compte de la casse comme
+// les forges.
+func dedupe(repos []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range repos {
+		k := strings.ToLower(r)
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, r)
+		}
+	}
+	return out
 }

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/UnPoilTefal/night-shift/internal/forge/github"
@@ -67,7 +69,11 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 		ID:         "pass-" + now().UTC().Format("20060102T150405Z"),
 		Now:        now,
 	}
-	report, err := pass.Run(context.Background(), cfg, github.New(*apiURL, token), harness.Stub{})
+	// Un arrêt (Ctrl-C, arrêt du conteneur) annule la passe ; les tickets en
+	// cours sont tout de même rendus, avec un contexte de nettoyage propre.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	report, err := pass.Run(ctx, cfg, github.New(*apiURL, token), harness.Stub{})
 	printReport(stdout, report)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "pass : %v\n", err)
