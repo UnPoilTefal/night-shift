@@ -83,6 +83,14 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 }
 
 func printReport(w io.Writer, r pass.Report) {
+	printRepos(w, r)
+	if len(r.Tickets) == 0 {
+		_, _ = fmt.Fprintln(w, "aucun ticket prêt éligible")
+	}
+	printTickets(w, r.Tickets)
+}
+
+func printRepos(w io.Writer, r pass.Report) {
 	_, _ = fmt.Fprintf(w, "passe %s\n", r.ID)
 	for _, rr := range r.Repos {
 		if rr.Detail != "" {
@@ -91,10 +99,10 @@ func printReport(w io.Writer, r pass.Report) {
 			_, _ = fmt.Fprintf(w, "dépôt %s : %s\n", rr.Repo, rr.Status)
 		}
 	}
-	if len(r.Tickets) == 0 {
-		_, _ = fmt.Fprintln(w, "aucun ticket prêt éligible")
-	}
-	for _, t := range r.Tickets {
+}
+
+func printTickets(w io.Writer, ts []pass.TicketReport) {
+	for _, t := range ts {
 		_, _ = fmt.Fprintf(w, "ticket %s#%d « %s » : %s (%s)\n", t.Repo, t.Number, t.Title, t.Outcome, t.Reason)
 		if t.PullRequest != "" {
 			_, _ = fmt.Fprintf(w, "PR en brouillon : %s\n", t.PullRequest)

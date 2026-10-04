@@ -115,7 +115,7 @@ func (c Claude) Run(ctx context.Context, task harness.Task) (harness.Result, err
 	)
 	cmd.Dir = c.Dir
 	cmd.Env = env
-	cmd.Stdin = strings.NewReader(c.prompt(task, needsInfo))
+	cmd.Stdin = strings.NewReader(c.prompt(task, needsInfo, tools))
 	// L'agent lance ses propres processus (outil Bash) : à l'échéance, tout
 	// son groupe est tué, pas seulement claude.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -172,12 +172,16 @@ func (c Claude) Run(ctx context.Context, task harness.Task) (harness.Result, err
 	return res, nil
 }
 
-func (c Claude) prompt(task harness.Task, needsInfo string) string {
+func (c Claude) prompt(task harness.Task, needsInfo string, tools []string) string {
 	return "/" + cmp.Or(c.Skill, "implement") + " " +
 		"Le brief ci-dessous fait foi : n'utilise pas d'autre contenu du ticket, tu n'as pas accès à la forge. " +
 		"Commite ton travail dans le dépôt courant, en commits atomiques, sans pousser. " +
 		"Si le brief ne suffit pas, si une précondition n'est pas remplie, ou s'il faudrait ajouter une dépendance que le brief ne nomme pas, " +
 		"ne commite rien : écris le motif dans le fichier " + needsInfo + " et arrête-toi.\n\n" +
+		"Seuls ces outils te sont permis, tout autre appel est refusé sans recours : " + strings.Join(tools, ", ") + ". " +
+		"Modifie les fichiers avec Edit ou Write, jamais par une commande shell. " +
+		"Lance une seule commande par appel Bash, sans enchaînement (&&, ;, |) ni redirection : " +
+		"par exemple « git add README.md », puis « git commit -m \"…\" » dans un autre appel.\n\n" +
 		"Ticket " + task.Ticket.Repo + "#" + fmt.Sprint(task.Ticket.Number) + ", passe " + task.PassID + ".\n\n" +
 		task.Brief
 }

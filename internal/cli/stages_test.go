@@ -101,6 +101,9 @@ func (w *world) selectStage(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("select : code %d\n%s\n%s", code, stdout, stderr)
 	}
+	if reserved := strings.Contains(stdout, "réservé"); reserved == strings.Contains(stdout, "aucun ticket prêt éligible") {
+		t.Fatalf("rapport de select contradictoire :\n%s", stdout)
+	}
 }
 
 func (w *world) agentStage(t *testing.T, mode string) {
