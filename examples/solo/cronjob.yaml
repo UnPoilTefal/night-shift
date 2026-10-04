@@ -21,6 +21,11 @@ spec:
   schedule: "0 2 * * *"
   # Une seule passe active à la fois.
   concurrencyPolicy: Forbid
+  # Le détail d'une passe (dépôts écartés, incidents) ne sort pas du cluster :
+  # il vit dans les logs de ses pods, consultables tant que son Job existe.
+  # On garde une semaine de passes nocturnes, réussies comme échouées.
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
   jobTemplate:
     spec:
       backoffLimit: 0
