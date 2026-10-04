@@ -67,14 +67,14 @@ A repository's **trust level** (*palier de confiance*: tickets per pass, draft o
 
 ## Roadmap
 
-Status: **the pass selects, reserves and hands back real tickets; no agent is plugged in yet.**
+Status: **a pass runs a real headless `claude -p` agent in three containers and opens draft PRs; container images, trusted-author filtering and the digest come next.**
 
 **Solo tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/2))
 
 - [x] Go foundation, CI and required checks ([#3](https://github.com/UnPoilTefal/night-shift/issues/3))
 - [x] Minimal pass: selection and reservation, with a stubbed harness ([#4](https://github.com/UnPoilTefal/night-shift/issues/4))
 - [x] Zone check: verdict on a PR diff, usable from any repository's CI ([#5](https://github.com/UnPoilTefal/night-shift/issues/5))
-- [ ] Real `claude -p` harness, with publication of a draft PR ([#6](https://github.com/UnPoilTefal/night-shift/issues/6))
+- [x] Real `claude -p` harness, with publication of a draft PR ([#6](https://github.com/UnPoilTefal/night-shift/issues/6))
 - [ ] Trusted-author filtering, digest, CI rounds, outcomes, container images ([#7](https://github.com/UnPoilTefal/night-shift/issues/7) to [#11](https://github.com/UnPoilTefal/night-shift/issues/11))
 
 **Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
@@ -84,16 +84,38 @@ Status: **the pass selects, reserves and hands back real tickets; no agent is pl
 
 ## Development
 
-There is nothing to deploy yet. The binary already runs a **minimal pass** (selection, reservation, hand-back to a human, with a stubbed agent) and provides the **zone check**, which an opted-in repository can run as a required check: see [`docs/opt-in.md`](docs/opt-in.md) for the opt-in schema and the GitHub Action.
+The binary runs a **pass** in three steps, one per container, and provides the **zone check**, which an opted-in repository can run as a required check: see [`docs/opt-in.md`](docs/opt-in.md) for the opt-in schema and the GitHub Action.
 
 ```sh
 go build -o night-shift ./cmd/night-shift
 ./night-shift version     # "dev" unless injected with -ldflags
 ./night-shift zones --base origin/main --head HEAD --head-ref agent/42-fix-typo
-NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift pass --repo owner/repo   # repositories without an opt-in are skipped
 make test                 # unit and envtest suites
 make lint
 ```
+
+A pass hands its work from one step to the next through two shared directories: `--state` (the reserved task, written by `select` only) and `--work` (the clone and the agent's output).
+
+```sh
+# 1. Selection (forge token): reserve the top ready ticket, clone the target repository.
+NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift select --repo owner/repo --state /state --work /work
+
+# 2. Agent (no forge token; refuses to start if one is present): run /implement through claude -p.
+#    --auth subscription reads CLAUDE_CODE_OAUTH_TOKEN, --auth api-key reads ANTHROPIC_API_KEY.
+CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state --work /work --timeout 25m
+
+# 3. Publication (forge token, no model): apply the commit series on agent/<n>-<slug>,
+#    push it, open a draft PR, and hand the ticket back in an explicit state.
+NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift publish --state /state --work /work
+```
+
+| Agent outcome | Ticket ends up |
+|---|---|
+| Commits | Linked to a **draft** PR, commit messages kept, `Night-Shift-Agent` and `Night-Shift-Pass` trailers added; no lifecycle label left |
+| Brief not enough, unmet precondition, unnamed dependency | `needs-info`, with the agent's reason |
+| Failure, timeout, crash | `ready-for-human`, with a mention of the interruption |
+
+[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment: a `CronJob` whose pod runs `select` and `agent` as init containers and `publish` as its container, with the forge token mounted only in the first and last. A test in the repository keeps it that way. Images, the egress proxy and transcript retention belong to your deployment. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
 
 ### Operator preview
 
