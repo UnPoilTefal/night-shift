@@ -78,6 +78,7 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 	}
 	printRepos(stdout, report)
 	printTickets(stdout, report.Tickets)
+	printRetriaged(stdout, report.Retriaged)
 	switch {
 	case len(tasks) == 0:
 		_, _ = fmt.Fprintln(stdout, "aucun ticket prêt éligible")

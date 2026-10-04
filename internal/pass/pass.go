@@ -62,11 +62,21 @@ type TicketReport struct {
 	Transcript  string
 }
 
+// RetriageReport est le constat d'un ticket sorti de la file sans être
+// traité, faute d'un brief que seul du contenu de confiance fonde.
+type RetriageReport struct {
+	Repo   string
+	Number int
+	Reason string
+}
+
 // Report est le rapport d'une passe.
 type Report struct {
 	ID      string
 	Repos   []RepoReport
 	Tickets []TicketReport
+	// Retriaged liste les tickets repassés en needs-triage.
+	Retriaged []RetriageReport
 }
 
 // Publisher est l'étape de Publication : elle applique la série de commits
@@ -107,11 +117,13 @@ func Run(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, p Pu
 // Select parcourt la file des dépôts adhérents et réserve au plus
 // cfg.MaxTickets tickets, dans l'ordre priorité puis ancienneté. Chaque tâche
 // rendue est réservée et doit être rendue par Settle, y compris quand Select
-// rend aussi une erreur.
+// rend aussi une erreur. Un ticket dont le brief ne repose pas sur du seul
+// contenu de confiance n'est pas réservé : il repasse en needs-triage.
 func Select(ctx context.Context, cfg Config, f forge.Forge) (Report, []harness.Task, error) {
 	r := Report{ID: cfg.ID}
 	var queue []forge.Ticket
 	perRepoCap := map[string]int{}
+	trustedAuthors := map[string][]string{}
 
 	for _, repo := range dedupe(cfg.Repos) {
 		o, rr := readOptIn(ctx, f, repo)
@@ -125,6 +137,7 @@ func Select(ctx context.Context, cfg Config, f forge.Forge) (Report, []harness.T
 			continue
 		}
 		perRepoCap[repo] = o.TrustLevel.TicketsPerPass
+		trustedAuthors[repo] = o.TrustedAuthors
 		for _, t := range ts {
 			if t.OpenBlockers == 0 {
 				queue = append(queue, t)
@@ -150,19 +163,83 @@ func Select(ctx context.Context, cfg Config, f forge.Forge) (Report, []harness.T
 		if taken[t.Repo] >= perRepoCap[t.Repo] {
 			continue
 		}
+		brief, reason := Brief(t, trustedAuthors[t.Repo])
+		if reason != "" {
+			if err := retriage(ctx, cfg, f, t, reason); err != nil {
+				return r, tasks, fmt.Errorf("retri de %s#%d : %w", t.Repo, t.Number, err)
+			}
+			r.Retriaged = append(r.Retriaged, RetriageReport{Repo: t.Repo, Number: t.Number, Reason: reason})
+			continue
+		}
 		if err := reserve(ctx, cfg, f, t); err != nil {
 			rollback(ctx, f, t)
 			return r, tasks, fmt.Errorf("réservation de %s#%d : %w", t.Repo, t.Number, err)
 		}
 		taken[t.Repo]++
-		tasks = append(tasks, harness.Task{Ticket: t, Brief: Brief(t), PassID: cfg.ID})
+		tasks = append(tasks, harness.Task{Ticket: relayed(t, trustedAuthors[t.Repo]), Brief: brief, PassID: cfg.ID})
 	}
 	return r, tasks, nil
 }
 
-// Brief construit le brief transmis à l'agent à partir du ticket.
-func Brief(t forge.Ticket) string {
-	return "# " + t.Title + "\n\n" + t.Body + "\n"
+// Brief construit le brief transmis à l'agent à partir du seul contenu
+// d'auteurs de confiance : le titre et le corps si l'auteur du ticket l'est,
+// puis les commentaires de confiance dans l'ordre, hors ceux de night-shift.
+// Le reste est écarté. Le brief date du dernier contenu de confiance. Si
+// aucun contenu n'est de confiance, ou si un tiers a écrit ou modifié un
+// commentaire depuis, Brief rend le motif pour lequel le ticket doit être
+// retrié par un humain.
+func Brief(t forge.Ticket, trustedAuthors []string) (brief, retriage string) {
+	var b strings.Builder
+	var last time.Time
+	if trusted(t.Author, t.AuthorAssociated, trustedAuthors) {
+		b.WriteString("# " + t.Title + "\n\n" + t.Body + "\n")
+		last = t.CreatedAt
+	}
+	for _, c := range t.Comments {
+		if !trusted(c.Author, c.Associated, trustedAuthors) {
+			continue
+		}
+		last = later(last, c.CreatedAt)
+		// Les comptes rendus des passes précédentes datent le brief sans en
+		// faire partie.
+		if !strings.HasPrefix(c.Body, commentPrefix) {
+			fmt.Fprintf(&b, "\n---\n\nCommentaire de %s :\n\n%s\n", c.Author, c.Body)
+		}
+	}
+	if b.Len() == 0 {
+		return "", "aucun contenu du ticket n'est écrit par un auteur de confiance"
+	}
+	for _, c := range t.Comments {
+		if !trusted(c.Author, c.Associated, trustedAuthors) && !later(c.CreatedAt, c.UpdatedAt).Before(last) {
+			return "", fmt.Sprintf("un commentaire de `%s`, auteur hors confiance, est postérieur au brief", c.Author)
+		}
+	}
+	return b.String(), ""
+}
+
+// trusted dit si un auteur est de confiance : associé au dépôt, ou nommé par
+// l'adhésion. Les forges ignorent la casse des identifiants.
+func trusted(author string, associated bool, trustedAuthors []string) bool {
+	return associated || slices.ContainsFunc(trustedAuthors, func(a string) bool { return strings.EqualFold(a, author) })
+}
+
+// later rend la plus récente de deux dates.
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+// relayed rend le ticket tel qu'il est relayé jusqu'au conteneur de
+// l'agent : sans corps ni commentaires, et sans titre si son auteur n'est
+// pas de confiance. Le brief reste le seul contenu du ticket qu'il reçoit.
+func relayed(t forge.Ticket, trustedAuthors []string) forge.Ticket {
+	t.Body, t.Comments = "", nil
+	if !trusted(t.Author, t.AuthorAssociated, trustedAuthors) {
+		t.Title = ""
+	}
+	return t
 }
 
 func readOptIn(ctx context.Context, f forge.Forge, repo string) (optin.OptIn, RepoReport) {
@@ -190,6 +267,10 @@ func priority(t forge.Ticket) int {
 	}
 	return best
 }
+
+// commentPrefix ouvre chaque commentaire que night-shift poste sur un
+// ticket.
+const commentPrefix = "night-shift "
 
 // cleanupTimeout borne les appels à la forge qui rendent un ticket : ils
 // doivent aboutir même si la passe a été annulée ou a dépassé sa durée.
@@ -270,6 +351,22 @@ func reserve(ctx context.Context, cfg Config, f forge.Forge, t forge.Ticket) err
 	}
 	return f.Comment(ctx, t.Repo, t.Number, fmt.Sprintf(
 		"night-shift : ticket réservé par la passe %s le %s.", cfg.ID, cfg.Now().UTC().Format(time.RFC3339)))
+}
+
+// retriage sort un ticket de la file sans le traiter : il repasse en
+// needs-triage, avec un commentaire qui explique pourquoi sans citer le
+// contenu en cause.
+func retriage(ctx context.Context, cfg Config, f forge.Forge, t forge.Ticket, reason string) error {
+	if err := f.AddLabel(ctx, t.Repo, t.Number, forge.LabelTriage); err != nil {
+		return err
+	}
+	if err := f.RemoveLabel(ctx, t.Repo, t.Number, forge.LabelReady); err != nil {
+		return err
+	}
+	return f.Comment(ctx, t.Repo, t.Number, fmt.Sprintf(
+		"night-shift (passe %s) : ticket non traité et sorti de la file : %s. "+
+			"L'agent ne reçoit que le contenu d'auteurs de confiance ; à un humain de juger si le brief doit changer, puis de remettre le ticket en %s.",
+		cfg.ID, reason, forge.LabelReady))
 }
 
 // rollback remet au mieux un ticket dans la file après une réservation

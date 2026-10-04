@@ -89,6 +89,11 @@ L'issue d'un ticket prêt après une passe, dérivée de la forge : mergé tel q
 _FR_: résultat
 _Avoid_: statut, score, result
 
+**Trusted author**:
+Un auteur dont le contenu peut entrer dans le brief transmis à l'agent : associé au dépôt par la forge (propriétaire, membre, collaborateur) ou nommé par l'adhésion. Tout autre auteur est un tiers.
+_FR_: auteur de confiance
+_Avoid_: mainteneur, auteur autorisé
+
 **Trust level**:
 Un niveau d'autonomie accordé aux passes d'un repo (tickets par passe, PR en brouillon ou prête), franchi sur décision humaine au vu des résultats.
 _FR_: palier de confiance

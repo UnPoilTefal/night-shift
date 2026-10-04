@@ -76,10 +76,16 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 	if _, err := remote.Git(ctx, dir, "push", "--quiet", "--no-follow-tags", "origin", ref+":"+ref); err != nil {
 		return "", err
 	}
+	// La passe efface le titre d'un ticket dont l'auteur n'est pas de
+	// confiance : la PR nomme alors le ticket.
+	title := t.Title
+	if title == "" {
+		title = fmt.Sprintf("night-shift : ticket #%d", t.Number)
+	}
 	return g.Forge.OpenDraftPR(ctx, t.Repo, forge.PullRequest{
 		Head:  branch,
 		Base:  base,
-		Title: t.Title,
+		Title: title,
 		Body: fmt.Sprintf("Closes #%d\n\nPR ouverte en brouillon par night-shift (passe %s, agent %s). "+
 			"Elle n'est jamais passée en prête ni mergée par night-shift : à relire par un humain.",
 			t.Number, oneLine(task.PassID), oneLine(agent)),

@@ -53,6 +53,14 @@ An agent treats whatever it reads as instructions, and a ticket may carry a prom
 | Two agents on the same ticket | Serialized passes and reservation | [ADR 0001](docs/adr/0001-passes-planifiees-serialisees.md) |
 | The agent merges or approves | Service identity holds a strict subset of the team's rights | [ADR 0003](docs/adr/0003-identite-sous-ensemble-des-droits.md) |
 
+### What the agent reads
+
+The pass, not the agent, builds the brief, and the agent never reads the ticket itself. An author is trusted when the forge associates them with the repository (owner, member, collaborator) or when the opt-in lists them under `trustedAuthors`.
+
+- The brief holds the title and body when the ticket's author is trusted, then every trusted comment, in order, except night-shift's own reports. Anything else is dropped before it reaches the agent's container.
+- The brief dates from its latest trusted content. If a third party wrote or edited a comment since then, or if no content is trusted at all, the ticket is not processed: it moves from `ready-for-agent` to `needs-triage`, with a comment that explains why without ever quoting the untrusted content. A human decides whether the brief must change, then puts the ticket back in `ready-for-agent`.
+- No ticket content is ever interpolated into a shell command: the brief reaches `claude -p` on its standard input, and the title only becomes a branch slug restricted to `[a-z0-9-]`.
+
 A repository is opened to passes only through an **opt-in** (*Adhésion*): a file versioned in the repository itself and protected as a forbidden zone. The repository must also be able to enforce required checks.
 
 ## Three tiers
@@ -67,7 +75,7 @@ A repository's **trust level** (*palier de confiance*: tickets per pass, draft o
 
 ## Roadmap
 
-Status: **a pass runs a real headless `claude -p` agent in three containers and opens draft PRs; container images, trusted-author filtering and the digest come next.**
+Status: **a pass runs a real headless `claude -p` agent in three containers, on a brief built from trusted authors only, and opens draft PRs; container images and the digest come next.**
 
 **Solo tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/2))
 
@@ -75,7 +83,8 @@ Status: **a pass runs a real headless `claude -p` agent in three containers and 
 - [x] Minimal pass: selection and reservation, with a stubbed harness ([#4](https://github.com/UnPoilTefal/night-shift/issues/4))
 - [x] Zone check: verdict on a PR diff, usable from any repository's CI ([#5](https://github.com/UnPoilTefal/night-shift/issues/5))
 - [x] Real `claude -p` harness, with publication of a draft PR ([#6](https://github.com/UnPoilTefal/night-shift/issues/6))
-- [ ] Trusted-author filtering, digest, CI rounds, outcomes, container images ([#7](https://github.com/UnPoilTefal/night-shift/issues/7) to [#11](https://github.com/UnPoilTefal/night-shift/issues/11))
+- [x] Trusted-author filtering: a third-party comment after the brief sends the ticket back to triage ([#7](https://github.com/UnPoilTefal/night-shift/issues/7))
+- [ ] Digest, CI rounds, outcomes, container images ([#8](https://github.com/UnPoilTefal/night-shift/issues/8) to [#11](https://github.com/UnPoilTefal/night-shift/issues/11))
 
 **Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
 

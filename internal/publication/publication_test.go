@@ -2,8 +2,10 @@ package publication_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -121,5 +123,40 @@ func TestBranchTransliteratesAccentsAndBoundsLength(t *testing.T) {
 		if got := publication.Branch(forge.Ticket{Number: 2, Title: title}); got != want {
 			t.Errorf("Branch(%q) = %q, attendu %q", title, got, want)
 		}
+	}
+}
+
+func TestShellMetacharactersInTitleHaveNoEffect(t *testing.T) {
+	remote, task, patches := fixture(t)
+	sentinel := t.TempDir()
+	task.Ticket.Title = fmt.Sprintf("$(touch %[1]s/a) `touch %[1]s/b` ; touch %[1]s/c | touch %[1]s/d && touch %[1]s/e", sentinel)
+	f := memforge.New()
+	p := publication.Git{Forge: f, GitURL: remote.Base}
+
+	if _, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: patches}); err != nil {
+		t.Fatal(err)
+	}
+
+	if entries, _ := os.ReadDir(sentinel); len(entries) != 0 {
+		t.Fatalf("le titre a été interprété par un shell : %v", entries)
+	}
+	pr := f.DraftPRs("o/a")[0]
+	if pr.Title != task.Ticket.Title || !regexp.MustCompile(`^agent/7-[a-z0-9-]+$`).MatchString(pr.Head) {
+		t.Fatalf("PR = %+v, attendu le titre tel quel et une branche réduite à [a-z0-9-]", pr)
+	}
+}
+
+func TestUntitledTaskStillOpensATitledDraft(t *testing.T) {
+	remote, task, patches := fixture(t)
+	task.Ticket.Title = ""
+	f := memforge.New()
+	p := publication.Git{Forge: f, GitURL: remote.Base}
+
+	if _, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: patches}); err != nil {
+		t.Fatal(err)
+	}
+
+	if pr := f.DraftPRs("o/a")[0]; !strings.Contains(pr.Title, "#7") || pr.Head != "agent/7" {
+		t.Fatalf("PR = %+v, attendu un titre qui nomme le ticket", pr)
 	}
 }
