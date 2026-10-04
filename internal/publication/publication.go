@@ -88,9 +88,20 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
 
+// accents translittère les lettres accentuées courantes, pour qu'un titre
+// en français donne un slug lisible.
+var accents = strings.NewReplacer(
+	"à", "a", "â", "a", "ä", "a", "á", "a", "ã", "a", "å", "a",
+	"ç", "c", "é", "e", "è", "e", "ê", "e", "ë", "e",
+	"î", "i", "ï", "i", "í", "i", "ì", "i", "ñ", "n",
+	"ô", "o", "ö", "o", "ó", "o", "ò", "o", "õ", "o", "ø", "o",
+	"ù", "u", "û", "u", "ü", "u", "ú", "u", "ÿ", "y", "ý", "y",
+	"œ", "oe", "æ", "ae", "ß", "ss",
+)
+
 // Branch rend la branche agent/<n°>-<slug> d'un ticket.
 func Branch(t forge.Ticket) string {
-	slug := strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(t.Title), "-"), "-")
+	slug := strings.Trim(nonSlug.ReplaceAllString(accents.Replace(strings.ToLower(t.Title)), "-"), "-")
 	if len(slug) > 40 {
 		slug = strings.TrimRight(slug[:40], "-")
 	}

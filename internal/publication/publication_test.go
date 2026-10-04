@@ -110,3 +110,16 @@ func TestPublishRefusesASeriesThatDoesNotApply(t *testing.T) {
 		t.Fatal("PR ouverte malgré l'échec")
 	}
 }
+
+func TestBranchTransliteratesAccentsAndBoundsLength(t *testing.T) {
+	for title, want := range map[string]string{
+		"Démo : section Utilisation dans le README": "agent/2-demo-section-utilisation-dans-le-readme",
+		"Œuvre à l'été, garçon !":                   "agent/2-oeuvre-a-l-ete-garcon",
+		"日本語":                                       "agent/2",
+		strings.Repeat("très long ", 10):            "agent/2-tres-long-tres-long-tres-long-tres-long",
+	} {
+		if got := publication.Branch(forge.Ticket{Number: 2, Title: title}); got != want {
+			t.Errorf("Branch(%q) = %q, attendu %q", title, got, want)
+		}
+	}
+}

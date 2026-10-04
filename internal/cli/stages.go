@@ -76,8 +76,12 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 			err = perr
 		}
 	}
-	printReport(stdout, report)
-	if len(tasks) > 0 && err == nil {
+	printRepos(stdout, report)
+	printTickets(stdout, report.Tickets)
+	switch {
+	case len(tasks) == 0:
+		_, _ = fmt.Fprintln(stdout, "aucun ticket prêt éligible")
+	case err == nil:
 		_, _ = fmt.Fprintf(stdout, "ticket %s#%d réservé, confié à l'agent\n", tasks[0].Ticket.Repo, tasks[0].Ticket.Number)
 	}
 	if err != nil {

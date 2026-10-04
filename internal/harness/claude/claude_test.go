@@ -100,7 +100,8 @@ func TestInvokesHeadlessImplementWithBriefOnStdin(t *testing.T) {
 		t.Fatalf("arguments = %q, attendu -p en tête", args)
 	}
 	prompt := r.file(t, "prompt")
-	if !strings.HasPrefix(prompt, "/implement ") || !strings.Contains(prompt, "Le brief qui fait foi ; $(rm -rf /)") {
+	if !strings.HasPrefix(prompt, "/implement ") || !strings.Contains(prompt, "Le brief qui fait foi ; $(rm -rf /)") ||
+		!strings.Contains(prompt, "Read, Bash(go test *)") || !strings.Contains(prompt, "une seule commande par appel Bash") {
 		t.Fatalf("prompt = %q", prompt)
 	}
 	if strings.Contains(strings.Join(args, " "), "brief") {
