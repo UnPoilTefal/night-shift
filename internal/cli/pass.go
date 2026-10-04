@@ -73,7 +73,7 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 	// cours sont tout de même rendus, avec un contexte de nettoyage propre.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	report, err := pass.Run(ctx, cfg, github.New(*apiURL, token), harness.Stub{})
+	report, err := pass.Run(ctx, cfg, github.New(*apiURL, token), harness.Stub{}, nil)
 	printReport(stdout, report)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "pass : %v\n", err)
@@ -96,5 +96,8 @@ func printReport(w io.Writer, r pass.Report) {
 	}
 	for _, t := range r.Tickets {
 		_, _ = fmt.Fprintf(w, "ticket %s#%d « %s » : %s (%s)\n", t.Repo, t.Number, t.Title, t.Outcome, t.Reason)
+		if t.PullRequest != "" {
+			_, _ = fmt.Fprintf(w, "PR en brouillon : %s\n", t.PullRequest)
+		}
 	}
 }

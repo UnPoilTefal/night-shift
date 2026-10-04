@@ -1,0 +1,91 @@
+# Exemple de passe du palier solo : un CronJob dont le pod enchaîne trois
+# conteneurs qui partagent deux volumes (ADR 0005).
+#
+#   select   (initContainer, jeton de forge)  réserve un ticket, prépare le clone
+#   agent    (initContainer, aucun jeton)      claude -p sur le clone
+#   publish  (conteneur, jeton de forge)       PR en brouillon, rendu du ticket
+#
+# Le jeton de forge n'est monté que dans select et publish ; un test du dépôt
+# (examples/solo) le vérifie. Les images, le proxy de sortie, la politique
+# réseau et la rétention des transcripts relèvent du déploiement : adaptez
+# noms, images et secrets à votre cluster.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: night-shift-pass
+spec:
+  schedule: "0 2 * * *"
+  # Une seule passe active à la fois.
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # Durée maximale de la passe : elle doit dépasser le --timeout de l'agent
+      # pour que publish ait le temps de rendre le ticket.
+      activeDeadlineSeconds: 2100
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: select
+              image: ghcr.io/example/night-shift:latest
+              args: ["select", "--repo", "owner/repo", "--state", "/state", "--work", "/work"]
+              env:
+                - name: NIGHT_SHIFT_GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef: {name: night-shift-forge, key: token}
+              volumeMounts:
+                - {name: state, mountPath: /state}
+                - {name: work, mountPath: /work}
+              securityContext: &hardened
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+            - name: agent
+              # Image d'outils du dépôt cible : night-shift, claude, git et la
+              # chaîne de build du dépôt.
+              image: ghcr.io/example/night-shift-agent:latest
+              args: ["agent", "--state", "/state", "--work", "/work", "--timeout", "30m", "--auth", "subscription"]
+              env:
+                # Abonnement ; pour une clé d'API : --auth api-key et
+                # ANTHROPIC_API_KEY à la place.
+                - name: CLAUDE_CODE_OAUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef: {name: night-shift-model, key: token}
+                - {name: CLAUDE_CONFIG_DIR, value: /transcripts}
+                - {name: HOME, value: /tmp}
+              volumeMounts:
+                - {name: state, mountPath: /state, readOnly: true}
+                - {name: work, mountPath: /work}
+                - {name: transcripts, mountPath: /transcripts}
+                - {name: tmp, mountPath: /tmp}
+              securityContext: *hardened
+          containers:
+            - name: publish
+              image: ghcr.io/example/night-shift:latest
+              args: ["publish", "--state", "/state", "--work", "/work"]
+              env:
+                - name: NIGHT_SHIFT_GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef: {name: night-shift-forge, key: token}
+                - {name: TMPDIR, value: /tmp}
+              volumeMounts:
+                - {name: state, mountPath: /state, readOnly: true}
+                - {name: work, mountPath: /work, readOnly: true}
+                - {name: tmp, mountPath: /tmp}
+              securityContext: *hardened
+          volumes:
+            - {name: state, emptyDir: {}}
+            - {name: work, emptyDir: {}}
+            - {name: tmp, emptyDir: {}}
+            # Transcripts réservés à l'agent, conservés 30 jours par le
+            # déploiement.
+            - name: transcripts
+              persistentVolumeClaim: {claimName: night-shift-transcripts}

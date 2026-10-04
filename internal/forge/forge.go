@@ -1,6 +1,6 @@
 // Package forge définit ce dont une passe a besoin d'une forge (GitHub,
 // GitLab…) : lister les tickets prêts, lire un fichier du dépôt, poser des
-// labels et commenter. Chaque forge fournit son adaptateur.
+// labels, commenter et ouvrir une PR en brouillon. Chaque forge fournit son adaptateur.
 package forge
 
 import (
@@ -30,6 +30,13 @@ type Ticket struct {
 	OpenBlockers int
 }
 
+// PullRequest décrit une PR à ouvrir, toujours en brouillon.
+type PullRequest struct {
+	// Head est la branche poussée, Base la branche visée.
+	Head, Base  string
+	Title, Body string
+}
+
 // Forge est le contrat qu'une passe attend d'une forge.
 type Forge interface {
 	// ReadyTickets liste les tickets ouverts portant LabelReady.
@@ -43,4 +50,7 @@ type Forge interface {
 	RemoveLabel(ctx context.Context, repo string, number int, label string) error
 	// Comment ajoute un commentaire à un ticket.
 	Comment(ctx context.Context, repo string, number int, body string) error
+	// OpenDraftPR ouvre une PR en brouillon et rend son URL. Aucune méthode ne
+	// permet de la passer en prête, de la merger ni de l'approuver.
+	OpenDraftPR(ctx context.Context, repo string, pr PullRequest) (url string, err error)
 }

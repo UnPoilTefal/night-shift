@@ -1,0 +1,28 @@
+#!/bin/sh
+# Doublure de « claude -p » : elle consigne ses arguments, son environnement
+# et son prompt dans $FAKE_CLAUDE_LOG, puis se comporte selon $FAKE_CLAUDE.
+printf '%s\n' "$@" > "$FAKE_CLAUDE_LOG/args"
+env > "$FAKE_CLAUDE_LOG/env"
+cat > "$FAKE_CLAUDE_LOG/prompt"
+pwd > "$FAKE_CLAUDE_LOG/cwd"
+
+ok='{"type":"result","subtype":"success","is_error":false,"result":"fini","session_id":"s-1","total_cost_usd":0.25,"duration_ms":1234}'
+case "$FAKE_CLAUDE" in
+commit)
+	echo x > f.txt && git add f.txt && git commit -q -m "feat: x" -m "Corps."
+	echo y > g.txt && git add g.txt && git commit -q -m "test: y"
+	mkdir -p "$CLAUDE_CONFIG_DIR/projects/repo" && echo '{}' > "$CLAUDE_CONFIG_DIR/projects/repo/s-1.jsonl"
+	;;
+needs-info)
+	printf 'la dépendance foo n est pas nommée' > "$NIGHT_SHIFT_NEEDS_INFO"
+	echo x > f.txt && git add f.txt && git commit -q -m "wip"
+	;;
+error)
+	echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom","session_id":"s-2","total_cost_usd":0.1,"duration_ms":10}'
+	exit 1
+	;;
+sleep)
+	sleep 10
+	;;
+esac
+echo "$ok"

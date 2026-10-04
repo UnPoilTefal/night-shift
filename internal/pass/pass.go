@@ -55,6 +55,11 @@ type TicketReport struct {
 	Title   string
 	Outcome harness.Outcome
 	Reason  string
+	// PullRequest est l'URL de la PR en brouillon, en cas de succès.
+	PullRequest string
+	CostUSD     float64
+	Duration    time.Duration
+	Transcript  string
 }
 
 // Report est le rapport d'une passe.
@@ -64,8 +69,46 @@ type Report struct {
 	Tickets []TicketReport
 }
 
-// Run exécute une passe.
-func Run(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness) (Report, error) {
+// Publisher est l'étape de Publication : elle applique la série de commits
+// de l'agent sur une branche agent/, la pousse et ouvre la PR en brouillon,
+// dont elle rend l'URL. C'est la seule étape qui écrit du code sur la forge.
+type Publisher interface {
+	Publish(ctx context.Context, task harness.Task, res harness.Result) (pullRequest string, err error)
+}
+
+// Run exécute une passe complète dans un seul processus : sélection et
+// réservation, travail de l'agent, puis Publication et rendu de chaque
+// ticket. Le palier solo répartit ces étapes entre trois conteneurs (Select,
+// harness, Settle) pour que l'agent ne côtoie jamais le jeton de forge.
+func Run(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, p Publisher) (Report, error) {
+	r, tasks, err := Select(ctx, cfg, f)
+	if err != nil {
+		for _, t := range tasks {
+			if tr, serr := Settle(ctx, cfg, f, p, t, harness.Result{Outcome: harness.Failed, Reason: "passe interrompue avant le travail de l'agent"}); serr == nil {
+				r.Tickets = append(r.Tickets, tr)
+			}
+		}
+		return r, err
+	}
+	for _, t := range tasks {
+		res, err := h.Run(ctx, t)
+		if err != nil {
+			res = harness.Result{Outcome: harness.Failed, Reason: err.Error()}
+		}
+		tr, err := Settle(ctx, cfg, f, p, t, res)
+		if err != nil {
+			return r, err
+		}
+		r.Tickets = append(r.Tickets, tr)
+	}
+	return r, nil
+}
+
+// Select parcourt la file des dépôts adhérents et réserve au plus
+// cfg.MaxTickets tickets, dans l'ordre priorité puis ancienneté. Chaque tâche
+// rendue est réservée et doit être rendue par Settle, y compris quand Select
+// rend aussi une erreur.
+func Select(ctx context.Context, cfg Config, f forge.Forge) (Report, []harness.Task, error) {
 	r := Report{ID: cfg.ID}
 	var queue []forge.Ticket
 	perRepoCap := map[string]int{}
@@ -98,22 +141,28 @@ func Run(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness) (Rep
 		)
 	})
 
+	var tasks []harness.Task
 	taken := map[string]int{}
 	for _, t := range queue {
-		if len(r.Tickets) >= cfg.MaxTickets {
+		if len(tasks) >= cfg.MaxTickets {
 			break
 		}
 		if taken[t.Repo] >= perRepoCap[t.Repo] {
 			continue
 		}
-		tr, err := process(ctx, cfg, f, h, t)
-		if err != nil {
-			return r, err
+		if err := reserve(ctx, cfg, f, t); err != nil {
+			rollback(ctx, f, t)
+			return r, tasks, fmt.Errorf("réservation de %s#%d : %w", t.Repo, t.Number, err)
 		}
 		taken[t.Repo]++
-		r.Tickets = append(r.Tickets, tr)
+		tasks = append(tasks, harness.Task{Ticket: t, Brief: Brief(t), PassID: cfg.ID})
 	}
-	return r, nil
+	return r, tasks, nil
+}
+
+// Brief construit le brief transmis à l'agent à partir du ticket.
+func Brief(t forge.Ticket) string {
+	return "# " + t.Title + "\n\n" + t.Body + "\n"
 }
 
 func readOptIn(ctx context.Context, f forge.Forge, repo string) (optin.OptIn, RepoReport) {
@@ -146,18 +195,30 @@ func priority(t forge.Ticket) int {
 // doivent aboutir même si la passe a été annulée ou a dépassé sa durée.
 const cleanupTimeout = time.Minute
 
-// process réserve un ticket, le confie au harness et le rend dans un état
-// explicite : aucun ticket ne reste en agent-in-progress, sauf si la forge
-// refuse aussi le rendu, ce que l'erreur signale.
-func process(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, t forge.Ticket) (TicketReport, error) {
-	if err := reserve(ctx, cfg, f, t); err != nil {
-		rollback(ctx, f, t)
-		return TicketReport{}, fmt.Errorf("réservation de %s#%d : %w", t.Repo, t.Number, err)
+// Settle publie le travail de l'agent sur un ticket réservé, puis le rend
+// dans un état explicite : aucun ticket ne reste en agent-in-progress, sauf
+// si la forge refuse aussi le rendu, ce que l'erreur signale. Sans Publisher,
+// un succès ne peut pas être publié et le ticket est rendu à un humain.
+func Settle(ctx context.Context, cfg Config, f forge.Forge, p Publisher, task harness.Task, res harness.Result) (TicketReport, error) {
+	t := task.Ticket
+	tr := TicketReport{
+		Repo: t.Repo, Number: t.Number, Title: t.Title,
+		CostUSD: res.CostUSD, Duration: res.Duration, Transcript: res.Transcript,
 	}
 
-	res, err := h.Run(ctx, t)
-	if err != nil {
-		res = harness.Result{Outcome: harness.Failed, Reason: err.Error()}
+	if res.Outcome == harness.Succeeded {
+		switch {
+		case len(res.Patches) == 0:
+			res.Outcome, res.Reason = harness.Failed, "l'agent annonce un succès sans aucun commit"
+		case p == nil:
+			res.Outcome, res.Reason = harness.Failed, "aucune Publication n'est configurée"
+		default:
+			url, err := p.Publish(ctx, task, res)
+			if err != nil {
+				res.Outcome, res.Reason = harness.Failed, "Publication échouée : "+err.Error()
+			}
+			tr.PullRequest = url
+		}
 	}
 
 	var label, comment string
@@ -165,22 +226,39 @@ func process(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, 
 	case harness.Succeeded:
 		// Machine d'états de la spec : en cas de succès, le ticket est relié
 		// à sa PR en brouillon et ne porte plus de label de cycle de vie.
-		comment = fmt.Sprintf("night-shift (passe %s) : travail terminé. %s", cfg.ID, res.Reason)
+		comment = fmt.Sprintf("night-shift (passe %s) : travail terminé, PR en brouillon à relire : %s\n\n%s%s",
+			cfg.ID, tr.PullRequest, res.Reason, accounting(res))
+	case harness.NeedsInfo:
+		label = forge.LabelNeedsInfo
+		comment = fmt.Sprintf("night-shift (passe %s) : l'agent s'est arrêté, il lui manque une information.\n\nMotif : %s%s",
+			cfg.ID, res.Reason, accounting(res))
 	case harness.Stopped:
 		label = forge.LabelHuman
-		comment = fmt.Sprintf("night-shift (passe %s) : arrêt motivé de l'agent, ticket rendu à un humain.\n\nMotif : %s", cfg.ID, res.Reason)
+		comment = fmt.Sprintf("night-shift (passe %s) : arrêt motivé de l'agent, ticket rendu à un humain.\n\nMotif : %s%s",
+			cfg.ID, res.Reason, accounting(res))
 	default:
 		res.Outcome = harness.Failed
 		label = forge.LabelHuman
-		comment = fmt.Sprintf("night-shift (passe %s) : traitement interrompu, ticket rendu à un humain.\n\nCause : %s", cfg.ID, res.Reason)
+		comment = fmt.Sprintf("night-shift (passe %s) : traitement interrompu, ticket rendu à un humain.\n\nCause : %s%s",
+			cfg.ID, res.Reason, accounting(res))
 	}
+	tr.Outcome, tr.Reason = res.Outcome, res.Reason
 
 	cctx, cancel := cleanupContext(ctx)
 	defer cancel()
 	if err := release(cctx, f, t, label, comment); err != nil {
 		return TicketReport{}, fmt.Errorf("rendu de %s#%d, le ticket peut rester en %s : %w", t.Repo, t.Number, forge.LabelInProgress, err)
 	}
-	return TicketReport{Repo: t.Repo, Number: t.Number, Title: t.Title, Outcome: res.Outcome, Reason: res.Reason}, nil
+	return tr, nil
+}
+
+// accounting résume le coût, la durée et la session de l'agent, quand il
+// les a rapportés.
+func accounting(res harness.Result) string {
+	if res.Duration == 0 && res.CostUSD == 0 && res.SessionID == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n\nDurée : %s, coût : %.2f $, session : %s", res.Duration.Round(time.Second), res.CostUSD, res.SessionID)
 }
 
 func reserve(ctx context.Context, cfg Config, f forge.Forge, t forge.Ticket) error {
