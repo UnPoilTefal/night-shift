@@ -12,7 +12,10 @@ const usage = `usage : night-shift <commande>
 
 Commandes :
   version   affiche la version du binaire
-  pass      lance une passe sur les tickets prêts des dépôts candidats
+  pass      lance une passe sur les tickets prêts des dépôts candidats, sans agent
+  select    étape 1 : réserve un ticket et prépare le clone de travail (jeton de forge)
+  agent     étape 2 : fait travailler claude -p sur le clone (aucun jeton de forge)
+  publish   étape 3 : publie la série de l'agent en PR brouillon et rend le ticket (jeton de forge)
   zones     check des zones sur le diff d'une PR d'agent
 `
 
@@ -30,6 +33,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "pass":
 		return runPass(args[1:], stdout, stderr)
+	case "select":
+		return runSelect(args[1:], stdout, stderr)
+	case "agent":
+		return runAgent(args[1:], stdout, stderr)
+	case "publish":
+		return runPublish(args[1:], stdout, stderr)
 	case "zones":
 		return runZones(args[1:], stdout, stderr)
 	default:

@@ -128,6 +128,18 @@ func (c *Client) Comment(ctx context.Context, repo string, number int, body stri
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/issues/%d/comments", repo, number), map[string]string{"body": body}, nil)
 }
 
+// OpenDraftPR implémente forge.Forge.
+func (c *Client) OpenDraftPR(ctx context.Context, repo string, pr forge.PullRequest) (string, error) {
+	body := map[string]any{"title": pr.Title, "head": pr.Head, "base": pr.Base, "body": pr.Body, "draft": true}
+	var out struct {
+		HTMLURL string `json:"html_url"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/repos/"+repo+"/pulls", body, &out); err != nil {
+		return "", err
+	}
+	return out.HTMLURL, nil
+}
+
 func (c *Client) request(ctx context.Context, method, path string, body any) (*http.Request, error) {
 	var r io.Reader
 	if body != nil {

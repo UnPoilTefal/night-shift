@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/forge/github"
 )
 
@@ -125,5 +126,30 @@ func TestErrorsNeverContainTheToken(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "401") {
 		t.Fatalf("erreur = %v, attendu le statut HTTP", err)
+	}
+}
+
+func TestOpenDraftPRAlwaysAsksForADraft(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/repos/o/a/pulls" {
+			t.Errorf("requête inattendue : %s %s", r.Method, r.URL)
+		}
+		var got map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got["draft"] != true || got["head"] != "agent/7-x" || got["base"] != "main" || got["title"] != "T" || got["body"] != "B" {
+			t.Errorf("corps = %v", got)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"html_url": "https://github.com/o/a/pull/12"}`)
+	})
+
+	url, err := c.OpenDraftPR(context.Background(), "o/a", forge.PullRequest{Head: "agent/7-x", Base: "main", Title: "T", Body: "B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != "https://github.com/o/a/pull/12" {
+		t.Fatalf("url = %q", url)
 	}
 }

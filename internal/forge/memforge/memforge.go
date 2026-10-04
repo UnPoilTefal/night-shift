@@ -27,11 +27,12 @@ type Forge struct {
 	mu     sync.Mutex
 	files  map[string]map[string][]byte
 	issues map[string][]*Issue
+	pulls  map[string][]forge.PullRequest
 }
 
 // New crée une forge vide.
 func New() *Forge {
-	return &Forge{files: map[string]map[string][]byte{}, issues: map[string][]*Issue{}}
+	return &Forge{files: map[string]map[string][]byte{}, issues: map[string][]*Issue{}, pulls: map[string][]forge.PullRequest{}}
 }
 
 // SetFile place un fichier sur la branche par défaut d'un dépôt.
@@ -139,6 +140,25 @@ func (f *Forge) Comment(ctx context.Context, repo string, number int, body strin
 	}
 	i.Comments = append(i.Comments, body)
 	return nil
+}
+
+// OpenDraftPR implémente forge.Forge ; l'URL rendue est
+// memforge://<dépôt>/pull/<n>.
+func (f *Forge) OpenDraftPR(ctx context.Context, repo string, pr forge.PullRequest) (string, error) {
+	if err := f.hook(ctx, "OpenDraftPR"); err != nil {
+		return "", err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pulls[repo] = append(f.pulls[repo], pr)
+	return fmt.Sprintf("memforge://%s/pull/%d", repo, len(f.pulls[repo])), nil
+}
+
+// DraftPRs rend les PR en brouillon ouvertes sur un dépôt.
+func (f *Forge) DraftPRs(repo string) []forge.PullRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.pulls[repo])
 }
 
 // hook simule le comportement d'une vraie forge : un contexte annulé fait
