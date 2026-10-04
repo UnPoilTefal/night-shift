@@ -8,7 +8,8 @@
 # Le jeton de forge n'est monté que dans select et publish ; un test du dépôt
 # (examples/solo) le vérifie. Les images, le proxy de sortie, la politique
 # réseau et la rétention des transcripts relèvent du déploiement : adaptez
-# noms, images et secrets à votre cluster.
+# noms et secrets à votre cluster. latest suit la dernière release des images ;
+# en production, épinglez plutôt une version publiée (X.Y.Z).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -35,7 +36,8 @@ spec:
               type: RuntimeDefault
           initContainers:
             - name: select
-              image: ghcr.io/example/night-shift:latest
+              image: ghcr.io/unpoiltefal/night-shift:latest
+              command: ["night-shift"]
               args: ["select", "--repo", "owner/repo", "--state", "/state", "--work", "/work"]
               env:
                 - name: NIGHT_SHIFT_GITHUB_TOKEN
@@ -50,8 +52,10 @@ spec:
                 capabilities: {drop: ["ALL"]}
             - name: agent
               # Image d'outils du dépôt cible : night-shift, claude, git et la
-              # chaîne de build du dépôt.
-              image: ghcr.io/example/night-shift-agent:latest
+              # chaîne de build du dépôt (ici la couche Go ; un dépôt peut en
+              # dériver la sienne).
+              image: ghcr.io/unpoiltefal/night-shift-go:latest
+              command: ["night-shift"]
               args: ["agent", "--state", "/state", "--work", "/work", "--timeout", "30m", "--auth", "subscription"]
               env:
                 # Abonnement ; pour une clé d'API : --auth api-key et
@@ -69,12 +73,15 @@ spec:
               securityContext: *hardened
           containers:
             - name: publish
-              image: ghcr.io/example/night-shift:latest
+              image: ghcr.io/unpoiltefal/night-shift:latest
+              command: ["night-shift"]
               args: ["publish", "--state", "/state", "--work", "/work"]
               env:
                 - name: NIGHT_SHIFT_GITHUB_TOKEN
                   valueFrom:
                     secretKeyRef: {name: night-shift-forge, key: token}
+                # La racine est en lecture seule : git écrit sous HOME.
+                - {name: HOME, value: /tmp}
                 - {name: TMPDIR, value: /tmp}
               volumeMounts:
                 - {name: state, mountPath: /state, readOnly: true}

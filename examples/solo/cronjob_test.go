@@ -4,6 +4,7 @@ package solo
 import (
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
@@ -20,6 +21,8 @@ type envVar struct {
 
 type container struct {
 	Name    string   `yaml:"name"`
+	Image   string   `yaml:"image"`
+	Command []string `yaml:"command"`
 	Args    []string `yaml:"args"`
 	Env     []envVar `yaml:"env"`
 	EnvFrom []struct {
@@ -145,5 +148,23 @@ func TestOnlySelectWritesTheTaskAndPublishOnlyReads(t *testing.T) {
 	}
 	if load(t).Spec.ConcurrencyPolicy != "Forbid" {
 		t.Fatal("une seule passe active à la fois : concurrencyPolicy Forbid attendu")
+	}
+}
+
+func TestEveryStageRunsNightShiftFromThePublishedImages(t *testing.T) {
+	spec := load(t).Spec.JobTemplate.Spec.Template.Spec
+	images := map[string]string{
+		"select":  "ghcr.io/unpoiltefal/night-shift:",
+		"agent":   "ghcr.io/unpoiltefal/night-shift-go:",
+		"publish": "ghcr.io/unpoiltefal/night-shift:",
+	}
+	for _, c := range append(slices.Clone(spec.InitContainers), spec.Containers...) {
+		// Les images n'ont pas d'ENTRYPOINT : la commande doit être explicite.
+		if !slices.Equal(c.Command, []string{"night-shift"}) || len(c.Args) == 0 || c.Args[0] != c.Name {
+			t.Errorf("%s : command %q, args %q ; attendu night-shift %s …", c.Name, c.Command, c.Args, c.Name)
+		}
+		if want, ok := images[c.Name]; !ok || !strings.HasPrefix(c.Image, want) {
+			t.Errorf("%s : image %q, attendu %s<version>", c.Name, c.Image, images[c.Name])
+		}
 	}
 }

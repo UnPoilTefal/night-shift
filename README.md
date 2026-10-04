@@ -75,7 +75,7 @@ A repository's **trust level** (*palier de confiance*: tickets per pass, draft o
 
 ## Roadmap
 
-Status: **a pass runs a real headless `claude -p` agent in three containers, on a brief built from trusted authors only, and opens draft PRs; container images and the digest come next.**
+Status: **a pass runs a real headless `claude -p` agent in three containers, on a brief built from trusted authors only, and opens draft PRs; container images are built and smoke-tested in CI, and the digest comes next.**
 
 **Solo tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/2))
 
@@ -84,7 +84,8 @@ Status: **a pass runs a real headless `claude -p` agent in three containers, on 
 - [x] Zone check: verdict on a PR diff, usable from any repository's CI ([#5](https://github.com/UnPoilTefal/night-shift/issues/5))
 - [x] Real `claude -p` harness, with publication of a draft PR ([#6](https://github.com/UnPoilTefal/night-shift/issues/6))
 - [x] Trusted-author filtering: a third-party comment after the brief sends the ticket back to triage ([#7](https://github.com/UnPoilTefal/night-shift/issues/7))
-- [ ] Digest, CI rounds, outcomes, container images ([#8](https://github.com/UnPoilTefal/night-shift/issues/8) to [#11](https://github.com/UnPoilTefal/night-shift/issues/11))
+- [x] Container images: a generic base and a Go layer, published on each release ([#11](https://github.com/UnPoilTefal/night-shift/issues/11))
+- [ ] Digest, CI rounds, outcomes ([#8](https://github.com/UnPoilTefal/night-shift/issues/8) to [#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 
 **Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
 
@@ -124,7 +125,28 @@ NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift publish --state /state --work /work
 | Brief not enough, unmet precondition, unnamed dependency | `needs-info`, with the agent's reason |
 | Failure, timeout, crash | `ready-for-human`, with a mention of the interruption |
 
-[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment: a `CronJob` whose pod runs `select` and `agent` as init containers and `publish` as its container, with the forge token mounted only in the first and last. A test in the repository keeps it that way. Images, the egress proxy and transcript retention belong to your deployment. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
+[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment: a `CronJob` whose pod runs `select` and `agent` as init containers and `publish` as its container, with the forge token mounted only in the first and last. A test in the repository keeps it that way. The egress proxy and transcript retention belong to your deployment. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
+
+### Container images
+
+Two images, built from [`images/`](images/) with [`docker-bake.hcl`](docker-bake.hcl):
+
+| Image | Contents | Used by |
+|---|---|---|
+| `ghcr.io/unpoiltefal/night-shift` | `night-shift`, Claude Code, `gh`, `git`, `make`, and the [mattpocock skills](https://github.com/mattpocock/skills) | `select` and `publish`, and as the base of a repository's tool image |
+| `ghcr.io/unpoiltefal/night-shift-go` | The base image plus the Go toolchain | `agent`, for Go repositories |
+
+- Both run as a non-root user (UID 65532) and carry no secret: tokens and webhooks are provided at run time. They work on a read-only root filesystem once `HOME` points to a writable directory, such as an `emptyDir` on `/tmp`, as the example `CronJob` does.
+- The skills are installed as Claude Code managed skills (`/etc/claude-code/.claude/skills`), so `HOME` and `CLAUDE_CONFIG_DIR` set by the deployment never hide `/implement`.
+- Every pull request builds both images, smoke-tests them (tools, injected version, non-root user, skills) and scans them for secrets. A `vX.Y.Z` tag publishes them for `linux/amd64` and `linux/arm64`, tagged `X.Y.Z`. CI then smoke-tests and scans the pushed images on both platforms, and only then moves `latest` (never for a pre-release such as `v1.0.0-rc.1`). No release has been cut yet: until then, build them locally.
+- Renovate tracks the base images, Claude Code, `gh` and the skills.
+
+```sh
+make images test-images scan-images          # local platform, tagged dev
+docker run --rm ghcr.io/unpoiltefal/night-shift-go:dev night-shift version
+```
+
+A repository's tool image derives from either one: `FROM ghcr.io/unpoiltefal/night-shift:<version>`, then its own toolchain.
 
 ### Operator preview
 

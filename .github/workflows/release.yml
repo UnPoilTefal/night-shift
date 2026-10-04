@@ -1,0 +1,54 @@
+name: Release
+
+# Un tag vX.Y.Z publie les images de base et Go sur ghcr.io, taguées X.Y.Z.
+# Les images poussées sont ensuite testées et scannées sur chaque plateforme ;
+# latest n'est déplacé qu'après, et jamais pour une pré-release (vX.Y.Z-…).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    name: Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REF_NAME: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Version tirée du tag
+        run: echo "IMAGE_VERSION=${REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Publication multi-architecture, taguée par version
+        run: make push-images
+      - name: Test de fumée et scan des secrets des images poussées, par plateforme
+        run: |
+          for platform in linux/amd64 linux/arm64; do
+            for img in night-shift night-shift-go; do
+              docker pull --platform "$platform" "ghcr.io/unpoiltefal/$img:$IMAGE_VERSION"
+            done
+            make test-images scan-images PLATFORM_UNDER_TEST="$platform"
+          done
+      - name: latest, hors pré-release
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          for img in night-shift night-shift-go; do
+            docker buildx imagetools create --tag "ghcr.io/unpoiltefal/$img:latest" "ghcr.io/unpoiltefal/$img:$IMAGE_VERSION"
+          done
