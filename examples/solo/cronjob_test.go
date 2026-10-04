@@ -38,8 +38,10 @@ type container struct {
 
 type cronJob struct {
 	Spec struct {
-		ConcurrencyPolicy string `yaml:"concurrencyPolicy"`
-		JobTemplate       struct {
+		ConcurrencyPolicy          string `yaml:"concurrencyPolicy"`
+		SuccessfulJobsHistoryLimit *int   `yaml:"successfulJobsHistoryLimit"`
+		FailedJobsHistoryLimit     *int   `yaml:"failedJobsHistoryLimit"`
+		JobTemplate                struct {
 			Spec struct {
 				Template struct {
 					Spec struct {
@@ -165,6 +167,20 @@ func TestEveryStageRunsNightShiftFromThePublishedImages(t *testing.T) {
 		}
 		if want, ok := images[c.Name]; !ok || !strings.HasPrefix(c.Image, want) {
 			t.Errorf("%s : image %q, attendu %s<version>", c.Name, c.Image, images[c.Name])
+		}
+	}
+}
+
+func TestRecentPassesStayInspectableInTheCluster(t *testing.T) {
+	spec := load(t).Spec
+	// Le détail d'une passe ne vit que dans les logs de ses pods : sans
+	// historique, Kubernetes ne garde qu'un seul Job échoué.
+	for name, limit := range map[string]*int{
+		"successfulJobsHistoryLimit": spec.SuccessfulJobsHistoryLimit,
+		"failedJobsHistoryLimit":     spec.FailedJobsHistoryLimit,
+	} {
+		if limit == nil || *limit < 7 {
+			t.Errorf("%s = %v, attendu au moins une semaine de passes (7)", name, limit)
 		}
 	}
 }
