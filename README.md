@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/UnPoilTefal/night-shift/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/UnPoilTefal/night-shift/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/UnPoilTefal/night-shift/badge)](https://scorecard.dev/viewer/?uri=github.com/UnPoilTefal/night-shift)
+[![Release](https://img.shields.io/github/v/tag/UnPoilTefal/night-shift?label=release&sort=semver)](https://github.com/UnPoilTefal?tab=packages&repo_name=night-shift)
 [![Go version](https://img.shields.io/github/go-mod/go-version/UnPoilTefal/night-shift)](go.mod)
 [![MIT License](https://img.shields.io/github/license/UnPoilTefal/night-shift)](LICENSE)
 [![Renovate](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot)](https://github.com/UnPoilTefal/night-shift/issues/1)
@@ -147,12 +148,12 @@ Two images, built from [`images/`](images/) with [`docker-bake.hcl`](docker-bake
 
 - Both run as a non-root user (UID 65532) and carry no secret: tokens and webhooks are provided at run time. They work on a read-only root filesystem once `HOME` points to a writable directory, such as an `emptyDir` on `/tmp`, as the example `CronJob` does.
 - The skills are installed as Claude Code managed skills (`/etc/claude-code/.claude/skills`), so `HOME` and `CLAUDE_CONFIG_DIR` set by the deployment never hide `/implement`.
-- Every pull request builds both images, smoke-tests them (tools, injected version, non-root user, skills) and scans them for secrets. A `vX.Y.Z` tag publishes them for `linux/amd64` and `linux/arm64`, tagged `X.Y.Z`. CI then smoke-tests and scans the pushed images on both platforms, and only then moves `latest` (never for a pre-release such as `v1.0.0-rc.1`). No release has been cut yet: until then, build them locally.
+- Every pull request builds both images, smoke-tests them (tools, injected version, non-root user, skills) and scans them for secrets. A `vX.Y.Z` tag publishes them for `linux/amd64` and `linux/arm64`, tagged `X.Y.Z`. CI then smoke-tests and scans the pushed images on both platforms, and only then moves `latest` (never for a pre-release such as `v1.0.0-rc.1`). The first release, `v0.1.0`, is out.
 - Renovate tracks the base images, Claude Code, `gh` and the skills.
 
 ```sh
-make images test-images scan-images          # local platform, tagged dev
-docker run --rm ghcr.io/unpoiltefal/night-shift-go:dev night-shift version
+docker run --rm ghcr.io/unpoiltefal/night-shift-go:0.1.0 night-shift version
+make images test-images scan-images          # or build them locally, tagged dev
 ```
 
 A repository's tool image derives from either one: `FROM ghcr.io/unpoiltefal/night-shift:<version>`, then its own toolchain.
@@ -185,7 +186,7 @@ make kind-down
 
 `make test-e2e` runs the same scenario end to end in CI.
 
-Every pull request runs the same lint and tests in CI. Both are required checks on `main`.
+Every pull request runs lint, tests, the image build with its smoke test and secret scan, and the kind end-to-end scenario. Lint, tests and images are required checks on `main`.
 
 ## Documentation
 
