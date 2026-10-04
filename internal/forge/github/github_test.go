@@ -27,17 +27,30 @@ func server(t *testing.T, h http.HandlerFunc) *github.Client {
 	return github.New(srv.URL, token)
 }
 
-func TestReadyTicketsSkipsPullRequestsAndReadsBlockers(t *testing.T) {
+func TestReadyTicketsSkipsPullRequestsAndReadsBlockersAndComments(t *testing.T) {
 	c := server(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/o/a/issues" || r.URL.Query().Get("labels") != "ready-for-agent" || r.URL.Query().Get("state") != "open" {
+		switch r.URL.Path {
+		case "/repos/o/a/issues":
+			if r.URL.Query().Get("labels") != "ready-for-agent" || r.URL.Query().Get("state") != "open" {
+				t.Errorf("requête inattendue : %s", r.URL)
+			}
+			_, _ = io.WriteString(w, `[
+				{"number": 1, "title": "t1", "body": "b", "created_at": "2026-10-01T10:00:00Z",
+				 "user": {"login": "alice"}, "author_association": "OWNER",
+				 "labels": [{"name": "ready-for-agent"}, {"name": "prio:P1"}],
+				 "issue_dependencies_summary": {"blocked_by": 2}},
+				{"number": 2, "title": "pr", "pull_request": {}, "user": {"login": "bob"}, "labels": []}
+			]`)
+		case "/repos/o/a/issues/1/comments":
+			_, _ = io.WriteString(w, `[
+				{"body": "brief", "created_at": "2026-10-02T10:00:00Z", "user": {"login": "bob"}, "author_association": "MEMBER"},
+				{"body": "consignes", "created_at": "2026-10-03T10:00:00Z", "updated_at": "2026-10-04T10:00:00Z", "user": {"login": "mallory"}, "author_association": "CONTRIBUTOR"},
+				{"body": "c", "created_at": "2026-10-03T11:00:00Z", "user": {"login": "carol"}, "author_association": "COLLABORATOR"}
+			]`)
+		default:
 			t.Errorf("requête inattendue : %s", r.URL)
+			http.NotFound(w, r)
 		}
-		_, _ = io.WriteString(w, `[
-			{"number": 1, "title": "t1", "body": "b", "created_at": "2026-10-01T10:00:00Z",
-			 "user": {"login": "alice"}, "labels": [{"name": "ready-for-agent"}, {"name": "prio:P1"}],
-			 "issue_dependencies_summary": {"blocked_by": 2}},
-			{"number": 2, "title": "pr", "pull_request": {}, "user": {"login": "bob"}, "labels": []}
-		]`)
 	})
 
 	ts, err := c.ReadyTickets(context.Background(), "o/a")
@@ -48,8 +61,17 @@ func TestReadyTicketsSkipsPullRequestsAndReadsBlockers(t *testing.T) {
 		t.Fatalf("tickets = %+v, attendu un seul (la PR est écartée)", ts)
 	}
 	got := ts[0]
-	if got.Number != 1 || got.Author != "alice" || got.OpenBlockers != 2 || len(got.Labels) != 2 || got.CreatedAt.IsZero() {
+	if got.Number != 1 || got.Author != "alice" || !got.AuthorAssociated || got.OpenBlockers != 2 || len(got.Labels) != 2 || got.CreatedAt.IsZero() {
 		t.Fatalf("ticket mal lu : %+v", got)
+	}
+	if len(got.Comments) != 3 {
+		t.Fatalf("commentaires = %+v, attendu trois", got.Comments)
+	}
+	if c := got.Comments[0]; c.Author != "bob" || !c.Associated || c.Body != "brief" || c.CreatedAt.IsZero() {
+		t.Fatalf("commentaire mal lu : %+v", c)
+	}
+	if got.Comments[1].Associated || got.Comments[1].UpdatedAt.IsZero() || !got.Comments[2].Associated {
+		t.Fatalf("association mal lue : %+v", got.Comments)
 	}
 }
 

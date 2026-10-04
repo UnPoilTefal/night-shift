@@ -19,15 +19,33 @@ const (
 
 // Ticket est une issue ouverte portant le rôle ready-for-agent.
 type Ticket struct {
-	Repo      string
-	Number    int
-	Title     string
-	Body      string
-	Author    string
-	Labels    []string
-	CreatedAt time.Time
+	Repo   string
+	Number int
+	Title  string
+	Body   string
+	Author string
+	// AuthorAssociated dit si l'auteur est associé au dépôt (propriétaire,
+	// membre, collaborateur) ; un auteur associé est de confiance.
+	AuthorAssociated bool
+	Labels           []string
+	CreatedAt        time.Time
 	// OpenBlockers compte les dépendances natives encore ouvertes.
 	OpenBlockers int
+	// Comments sont les commentaires du ticket, du plus ancien au plus
+	// récent, quel que soit leur auteur : la passe seule les filtre.
+	Comments []Comment
+}
+
+// Comment est un commentaire d'un ticket.
+type Comment struct {
+	Author string
+	// Associated dit si l'auteur est associé au dépôt, comme
+	// Ticket.AuthorAssociated.
+	Associated bool
+	Body       string
+	CreatedAt  time.Time
+	// UpdatedAt est la date de la dernière modification, s'il y en a eu.
+	UpdatedAt time.Time
 }
 
 // PullRequest décrit une PR à ouvrir, toujours en brouillon.
@@ -39,7 +57,8 @@ type PullRequest struct {
 
 // Forge est le contrat qu'une passe attend d'une forge.
 type Forge interface {
-	// ReadyTickets liste les tickets ouverts portant LabelReady.
+	// ReadyTickets liste les tickets ouverts portant LabelReady, avec leurs
+	// commentaires.
 	ReadyTickets(ctx context.Context, repo string) ([]Ticket, error)
 	// File lit un fichier sur la branche par défaut ; ok vaut false s'il
 	// n'existe pas.

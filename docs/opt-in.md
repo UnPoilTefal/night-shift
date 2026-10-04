@@ -13,7 +13,7 @@ trustLevel:                     # required, raised only by a human decision
 
 toolImage: ghcr.io/example/tools-go:1   # optional, image providing the repo's build and test toolchain
 
-trustedAuthors:                 # optional, in addition to the forge's own association (owners, members)
+trustedAuthors:                 # optional, in addition to the forge's own association (owners, members, collaborators)
   - alice
 
 forbiddenZones:                 # paths an agent PR must never modify: the zone check blocks it

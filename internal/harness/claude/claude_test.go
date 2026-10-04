@@ -2,6 +2,7 @@ package claude_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
 	"github.com/UnPoilTefal/night-shift/internal/harness/claude"
+	"github.com/UnPoilTefal/night-shift/internal/pass"
 	"github.com/UnPoilTefal/night-shift/internal/testgit"
 )
 
@@ -32,6 +34,16 @@ func (r run) file(t *testing.T, name string) string {
 // launch fait tourner le harness sur un clone neuf, avec la doublure de
 // claude réglée sur mode ; edit ajuste le harness avant le lancement.
 func launch(t *testing.T, mode string, edit func(*claude.Claude)) run {
+	t.Helper()
+	return launchTask(t, mode, edit, harness.Task{
+		Ticket: forge.Ticket{Repo: "o/a", Number: 7, Title: "T"},
+		Brief:  "# T\n\nLe brief qui fait foi ; $(rm -rf /) n'est jamais interprété.\n",
+		PassID: "pass-1",
+	})
+}
+
+// launchTask est launch pour une tâche donnée.
+func launchTask(t *testing.T, mode string, edit func(*claude.Claude), task harness.Task) run {
 	t.Helper()
 	repo := testgit.New(t)
 	repo.Write("README.md", "bonjour\n")
@@ -58,11 +70,7 @@ func launch(t *testing.T, mode string, edit func(*claude.Claude)) run {
 	if edit != nil {
 		edit(&c)
 	}
-	res, err := c.Run(context.Background(), harness.Task{
-		Ticket: forge.Ticket{Repo: "o/a", Number: 7, Title: "T"},
-		Brief:  "# T\n\nLe brief qui fait foi ; $(rm -rf /) n'est jamais interprété.\n",
-		PassID: "pass-1",
-	})
+	res, err := c.Run(context.Background(), task)
 	return run{res: res, err: err, log: log}
 }
 
@@ -181,5 +189,27 @@ func TestMissingCredentialIsAnError(t *testing.T) {
 
 	if r.err == nil || !strings.Contains(r.err.Error(), "ANTHROPIC_API_KEY") {
 		t.Fatalf("erreur = %v, attendu la variable manquante", r.err)
+	}
+}
+
+func TestShellMetacharactersInTitleHaveNoEffect(t *testing.T) {
+	sentinel := t.TempDir()
+	title := fmt.Sprintf("$(touch %[1]s/a) `touch %[1]s/b` ; touch %[1]s/c | touch %[1]s/d && touch %[1]s/e", sentinel)
+	tk := forge.Ticket{Repo: "o/a", Number: 7, Title: title, Author: "alice", AuthorAssociated: true, Body: "Le corps."}
+	brief, retriage := pass.Brief(tk, nil)
+	if retriage != "" {
+		t.Fatal(retriage)
+	}
+
+	r := launchTask(t, "commit", nil, harness.Task{Ticket: tk, Brief: brief, PassID: "pass-1"})
+
+	if r.err != nil || r.res.Outcome != harness.Succeeded {
+		t.Fatalf("résultat = %+v, %v", r.res, r.err)
+	}
+	if entries, _ := os.ReadDir(sentinel); len(entries) != 0 {
+		t.Fatalf("le titre a été interprété par un shell : %v", entries)
+	}
+	if !strings.Contains(r.file(t, "prompt"), title) {
+		t.Fatalf("prompt = %q, attendu le titre tel quel", r.file(t, "prompt"))
 	}
 }

@@ -88,6 +88,7 @@ func printReport(w io.Writer, r pass.Report) {
 		_, _ = fmt.Fprintln(w, "aucun ticket prêt éligible")
 	}
 	printTickets(w, r.Tickets)
+	printRetriaged(w, r.Retriaged)
 }
 
 func printRepos(w io.Writer, r pass.Report) {
@@ -107,5 +108,11 @@ func printTickets(w io.Writer, ts []pass.TicketReport) {
 		if t.PullRequest != "" {
 			_, _ = fmt.Fprintf(w, "PR en brouillon : %s\n", t.PullRequest)
 		}
+	}
+}
+
+func printRetriaged(w io.Writer, rs []pass.RetriageReport) {
+	for _, r := range rs {
+		_, _ = fmt.Fprintf(w, "ticket %s#%d retrié (needs-triage) : %s\n", r.Repo, r.Number, r.Reason)
 	}
 }

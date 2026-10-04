@@ -42,15 +42,36 @@ type issue struct {
 	Body        string    `json:"body"`
 	CreatedAt   time.Time `json:"created_at"`
 	PullRequest *struct{} `json:"pull_request"`
-	User        struct {
-		Login string `json:"login"`
-	} `json:"user"`
-	Labels []struct {
+	User        user      `json:"user"`
+	Association string    `json:"author_association"`
+	Labels      []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 	Dependencies *struct {
 		BlockedBy int `json:"blocked_by"`
 	} `json:"issue_dependencies_summary"`
+}
+
+type user struct {
+	Login string `json:"login"`
+}
+
+type comment struct {
+	Body        string    `json:"body"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	User        user      `json:"user"`
+	Association string    `json:"author_association"`
+}
+
+// associated dit si une association GitHub vaut accès au dépôt : les
+// contributeurs passés et les inconnus n'en ont pas.
+func associated(association string) bool {
+	switch association {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	}
+	return false
 }
 
 // ReadyTickets implémente forge.Forge. Les PR, que l'API des issues renvoie
@@ -70,7 +91,7 @@ func (c *Client) ReadyTickets(ctx context.Context, repo string) ([]forge.Ticket,
 			}
 			t := forge.Ticket{
 				Repo: repo, Number: i.Number, Title: i.Title, Body: i.Body,
-				Author: i.User.Login, CreatedAt: i.CreatedAt,
+				Author: i.User.Login, AuthorAssociated: associated(i.Association), CreatedAt: i.CreatedAt,
 			}
 			for _, l := range i.Labels {
 				t.Labels = append(t.Labels, l.Name)
@@ -78,10 +99,36 @@ func (c *Client) ReadyTickets(ctx context.Context, repo string) ([]forge.Ticket,
 			if i.Dependencies != nil {
 				t.OpenBlockers = i.Dependencies.BlockedBy
 			}
+			comments, err := c.comments(ctx, repo, i.Number)
+			if err != nil {
+				return nil, err
+			}
+			t.Comments = comments
 			ts = append(ts, t)
 		}
 		if len(batch) < 100 {
 			return ts, nil
+		}
+	}
+}
+
+// comments lit tous les commentaires d'un ticket, du plus ancien au plus
+// récent.
+func (c *Client) comments(ctx context.Context, repo string, number int) ([]forge.Comment, error) {
+	var out []forge.Comment
+	for page := 1; ; page++ {
+		var batch []comment
+		if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=100&page=%d", repo, number, page), nil, &batch); err != nil {
+			return nil, err
+		}
+		for _, cm := range batch {
+			out = append(out, forge.Comment{
+				Author: cm.User.Login, Associated: associated(cm.Association), Body: cm.Body,
+				CreatedAt: cm.CreatedAt, UpdatedAt: cm.UpdatedAt,
+			})
+		}
+		if len(batch) < 100 {
+			return out, nil
 		}
 	}
 }

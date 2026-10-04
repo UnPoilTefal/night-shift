@@ -11,7 +11,9 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 )
 
-// Issue est l'état d'un ticket dans la forge en mémoire.
+// Issue est l'état d'un ticket dans la forge en mémoire. Ticket.Comments
+// porte les commentaires de l'état initial ; Comments, ceux que la passe a
+// postés.
 type Issue struct {
 	forge.Ticket
 	Closed   bool
@@ -78,6 +80,7 @@ func (f *Forge) ReadyTickets(ctx context.Context, repo string) ([]forge.Ticket, 
 		if !i.Closed && slices.Contains(i.Labels, forge.LabelReady) {
 			t := i.Ticket
 			t.Labels = slices.Clone(i.Labels)
+			t.Comments = slices.Clone(i.Ticket.Comments)
 			ts = append(ts, t)
 		}
 	}
