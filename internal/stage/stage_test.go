@@ -9,6 +9,7 @@ import (
 
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
+	"github.com/UnPoilTefal/night-shift/internal/pass"
 	"github.com/UnPoilTefal/night-shift/internal/stage"
 )
 
@@ -34,6 +35,30 @@ func TestTaskRoundTrip(t *testing.T) {
 	}
 	if got.Ticket.Repo != "o/a" || got.Ticket.Number != 7 || got.Brief != want.Brief || got.BaseSHA != "abc" || got.PassID != "pass-1" {
 		t.Fatalf("tâche relue = %+v", got)
+	}
+}
+
+func TestReportRoundTrip(t *testing.T) {
+	d := dirs(t)
+	if _, ok, err := d.ReadReport(); ok || err != nil {
+		t.Fatalf("aucun rapport attendu avant la sélection : ok=%v err=%v", ok, err)
+	}
+	want := pass.Report{
+		ID:        "pass-1",
+		Repos:     []pass.RepoReport{{Repo: "o/a", Status: pass.Eligible}, {Repo: "o/b", Status: pass.InvalidOptIn, Detail: "version 7"}},
+		Tickets:   []pass.TicketReport{{Repo: "o/a", Number: 3, Outcome: harness.Failed, Reason: "clone", CostUSD: 0.1, Duration: time.Second}},
+		Retriaged: []pass.RetriageReport{{Repo: "o/a", Number: 4, Reason: "tiers"}},
+	}
+	if err := d.WriteReport(want); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := d.ReadReport()
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if got.ID != "pass-1" || len(got.Repos) != 2 || got.Repos[1].Detail != "version 7" ||
+		len(got.Tickets) != 1 || got.Tickets[0].Duration != time.Second || len(got.Retriaged) != 1 {
+		t.Fatalf("rapport relu = %+v", got)
 	}
 }
 

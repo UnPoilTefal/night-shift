@@ -175,3 +175,28 @@ func TestOpenDraftPRAlwaysAsksForADraft(t *testing.T) {
 		t.Fatalf("url = %q", url)
 	}
 }
+
+func TestCreateIssue(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/repos/o/a/issues" {
+			t.Errorf("requête inattendue : %s %s", r.Method, r.URL)
+		}
+		var got map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got["title"] != "T" || got["body"] != "B" || len(got) != 2 {
+			t.Errorf("corps = %v", got)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"number": 50, "html_url": "https://github.com/o/a/issues/50"}`)
+	})
+
+	n, url, err := c.CreateIssue(context.Background(), "o/a", "T", "B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 50 || url != "https://github.com/o/a/issues/50" {
+		t.Fatalf("issue = %d, %q", n, url)
+	}
+}

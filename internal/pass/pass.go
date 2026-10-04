@@ -77,6 +77,12 @@ type Report struct {
 	Tickets []TicketReport
 	// Retriaged liste les tickets repassés en needs-triage.
 	Retriaged []RetriageReport
+	// Started et Finished bornent la passe, de la sélection au rendu du
+	// dernier ticket.
+	Started, Finished time.Time
+	// Errors sont les incidents qui ont interrompu une partie de la passe ;
+	// le digest les rapporte.
+	Errors []string
 }
 
 // Publisher est l'étape de Publication : elle applique la série de commits
@@ -92,13 +98,20 @@ type Publisher interface {
 // harness, Settle) pour que l'agent ne côtoie jamais le jeton de forge.
 func Run(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, p Publisher) (Report, error) {
 	r, tasks, err := Select(ctx, cfg, f)
+	end := func(err error) (Report, error) {
+		if err != nil {
+			r.Errors = append(r.Errors, err.Error())
+		}
+		r.Finished = cfg.Now()
+		return r, err
+	}
 	if err != nil {
 		for _, t := range tasks {
 			if tr, serr := Settle(ctx, cfg, f, p, t, harness.Result{Outcome: harness.Failed, Reason: "passe interrompue avant le travail de l'agent"}); serr == nil {
 				r.Tickets = append(r.Tickets, tr)
 			}
 		}
-		return r, err
+		return end(err)
 	}
 	for _, t := range tasks {
 		res, err := h.Run(ctx, t)
@@ -107,11 +120,11 @@ func Run(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, p Pu
 		}
 		tr, err := Settle(ctx, cfg, f, p, t, res)
 		if err != nil {
-			return r, err
+			return end(err)
 		}
 		r.Tickets = append(r.Tickets, tr)
 	}
-	return r, nil
+	return end(nil)
 }
 
 // Select parcourt la file des dépôts adhérents et réserve au plus
@@ -120,7 +133,7 @@ func Run(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, p Pu
 // rend aussi une erreur. Un ticket dont le brief ne repose pas sur du seul
 // contenu de confiance n'est pas réservé : il repasse en needs-triage.
 func Select(ctx context.Context, cfg Config, f forge.Forge) (Report, []harness.Task, error) {
-	r := Report{ID: cfg.ID}
+	r := Report{ID: cfg.ID, Started: cfg.Now()}
 	var queue []forge.Ticket
 	perRepoCap := map[string]int{}
 	trustedAuthors := map[string][]string{}
@@ -324,6 +337,7 @@ func Settle(ctx context.Context, cfg Config, f forge.Forge, p Publisher, task ha
 			cfg.ID, res.Reason, accounting(res))
 	}
 	tr.Outcome, tr.Reason = res.Outcome, res.Reason
+	comment += "\n\nRésultat provisoire : " + ProvisionalOutcome(res.Outcome)
 
 	cctx, cancel := cleanupContext(ctx)
 	defer cancel()
@@ -331,6 +345,20 @@ func Settle(ctx context.Context, cfg Config, f forge.Forge, p Publisher, task ha
 		return TicketReport{}, fmt.Errorf("rendu de %s#%d, le ticket peut rester en %s : %w", t.Repo, t.Number, forge.LabelInProgress, err)
 	}
 	return tr, nil
+}
+
+// ProvisionalOutcome dit, pour un humain, dans quel état la passe laisse un
+// ticket selon l'issue de l'agent ; le Résultat définitif se lira sur la
+// forge (PR mergée, fermée…).
+func ProvisionalOutcome(o harness.Outcome) string {
+	switch o {
+	case harness.Succeeded:
+		return "PR en brouillon à relire"
+	case harness.NeedsInfo:
+		return "rendu en " + forge.LabelNeedsInfo + ", il manque une information"
+	default:
+		return "rendu à un humain (" + forge.LabelHuman + ")"
+	}
 }
 
 // accounting résume le coût, la durée et la session de l'agent, quand il

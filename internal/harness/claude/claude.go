@@ -43,6 +43,10 @@ var credentialEnv = map[Auth]string{ // #nosec G101 -- noms de variables, pas de
 // n'est transmise à l'agent.
 var ForgeTokenEnv = []string{"NIGHT_SHIFT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
 
+// PassSecretEnv liste les autres secrets de la passe, réservés aux étapes de
+// confiance : aucun n'est transmis à l'agent.
+var PassSecretEnv = []string{"NIGHT_SHIFT_DISCORD_WEBHOOK"}
+
 // DefaultAllowedTools sont les outils permis à l'agent quand rien d'autre
 // n'est configuré : lire et éditer le dépôt, et lancer git, go et make.
 var DefaultAllowedTools = []string{"Read", "Edit", "Write", "Glob", "Grep", "Skill", "Bash(git *)", "Bash(go *)", "Bash(make *)"}
@@ -194,7 +198,7 @@ func (c Claude) env() ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("moyen d'authentification %q inconnu, attendu %s ou %s", c.Auth, Subscription, APIKey)
 	}
-	drop := append(slices.Clone(ForgeTokenEnv), "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
+	drop := append(slices.Concat(ForgeTokenEnv, PassSecretEnv), "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
 	for _, v := range credentialEnv {
 		drop = append(drop, v)
 	}

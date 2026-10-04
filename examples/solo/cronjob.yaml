@@ -3,10 +3,13 @@
 #
 #   select   (initContainer, jeton de forge)  réserve un ticket, prépare le clone
 #   agent    (initContainer, aucun jeton)      claude -p sur le clone
-#   publish  (conteneur, jeton de forge)       PR en brouillon, rendu du ticket
+#   publish  (conteneur, jeton de forge)       PR en brouillon, rendu du ticket,
+#                                              digest et notification Discord
 #
-# Le jeton de forge n'est monté que dans select et publish ; un test du dépôt
-# (examples/solo) le vérifie. Les images, le proxy de sortie, la politique
+# Le jeton de forge n'est monté que dans select et publish, le webhook
+# Discord que dans publish ; un test du dépôt (examples/solo) le vérifie. Le
+# proxy de sortie doit laisser publish joindre discord.com pour la
+# notification. Les images, le proxy de sortie, la politique
 # réseau et la rétention des transcripts relèvent du déploiement : adaptez
 # noms et secrets à votre cluster. latest suit la dernière release des images ;
 # en production, épinglez plutôt une version publiée (X.Y.Z).
@@ -80,6 +83,11 @@ spec:
                 - name: NIGHT_SHIFT_GITHUB_TOKEN
                   valueFrom:
                     secretKeyRef: {name: night-shift-forge, key: token}
+                # Facultatif : sans webhook, le digest le signale et la passe
+                # réussit quand même.
+                - name: NIGHT_SHIFT_DISCORD_WEBHOOK
+                  valueFrom:
+                    secretKeyRef: {name: night-shift-discord, key: webhook, optional: true}
                 # La racine est en lecture seule : git écrit sous HOME.
                 - {name: HOME, value: /tmp}
                 - {name: TMPDIR, value: /tmp}

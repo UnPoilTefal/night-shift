@@ -27,6 +27,8 @@ type fakeGitHub struct {
 	pulls    []map[string]any
 	// thread est la discussion initiale du ticket, servie telle quelle.
 	thread []map[string]any
+	// digests sont les issues de digest ouvertes.
+	digests []map[string]any
 }
 
 func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +47,12 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"user": map[string]any{"login": "alice"}, "author_association": "OWNER",
 			"labels": []map[string]any{{"name": "ready-for-agent"}},
 		}})
+	case r.Method == http.MethodPost && r.URL.Path == "/repos/o/a/issues":
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		g.digests = append(g.digests, body)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprintf(w, `{"number": %d, "html_url": "https://github.example/o/a/issues/%[1]d"}`, 100+len(g.digests))
 	case r.Method == http.MethodGet && r.URL.Path == "/repos/o/a/issues/7/comments":
 		_ = json.NewEncoder(w).Encode(append([]map[string]any{}, g.thread...))
 	case r.Method == http.MethodPost && r.URL.Path == "/repos/o/a/issues/7/labels":
@@ -85,6 +93,8 @@ type world struct {
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	// Un webhook réel présent dans l'environnement ne doit jamais servir.
+	t.Setenv(cli.WebhookEnv, "")
 	src := testgit.New(t)
 	src.Write("README.md", "bonjour\n")
 	src.Commit("init")
@@ -178,6 +188,12 @@ func TestThreeStagesTurnAReadyTicketIntoADraftPR(t *testing.T) {
 	if !strings.Contains(stdout, "succeeded") || !strings.Contains(stdout, "https://github.example/o/a/pull/1") {
 		t.Fatalf("rapport = %q", stdout)
 	}
+	if len(w.gh.digests) != 1 || !strings.Contains(fmt.Sprint(w.gh.digests[0]["body"]), "https://github.example/o/a/pull/1") {
+		t.Fatalf("digests = %v, attendu une issue qui renvoie vers la PR", w.gh.digests)
+	}
+	if !strings.Contains(stdout, "digest o/a : https://github.example/o/a/issues/101") {
+		t.Fatalf("rapport = %q, attendu le lien du digest", stdout)
+	}
 }
 
 func TestNeedsInfoAgentLeavesTicketInNeedsInfo(t *testing.T) {
@@ -210,20 +226,36 @@ func TestInterruptedAgentHandsTicketToHuman(t *testing.T) {
 	}
 }
 
-func TestFailedCloneHandsTheReservedTicketToAHuman(t *testing.T) {
+func TestFailedCloneHandsTheTicketToAHumanAndThePassStillGetsItsDigest(t *testing.T) {
 	w := newWorld(t)
 	t.Setenv(cli.TokenEnv, secret)
 
-	code, _, _ := run("select", "--repo", "o/a", "--api-url", w.api, "--git-url", t.TempDir(), "--state", w.state, "--work", w.work)
+	// select ne doit pas échouer : le pod s'arrêterait avant la Publication.
+	code, _, stderr := run("select", "--repo", "o/a", "--api-url", w.api, "--git-url", t.TempDir(), "--state", w.state, "--work", w.work)
 
-	if code != 1 {
-		t.Fatalf("code = %d, attendu 1", code)
+	if code != 0 {
+		t.Fatalf("select : code = %d, attendu 0\n%s", code, stderr)
 	}
 	if got := w.lifecycle(); !slices.Equal(got, []string{"ready-for-human"}) {
 		t.Fatalf("labels de cycle de vie = %v, attendu [ready-for-human]", got)
 	}
 	if _, err := os.Stat(filepath.Join(w.state, "task.json")); err == nil {
 		t.Fatal("aucune tâche ne doit être confiée à l'agent")
+	}
+
+	w.agentStage(t, "commit")
+	t.Setenv(cli.TokenEnv, secret)
+	code, _, _ = run("publish", "--api-url", w.api, "--git-url", w.remote.Base, "--state", w.state, "--work", w.work)
+
+	if code != 1 {
+		t.Fatalf("publish : code = %d, attendu 1 pour signaler l'incident", code)
+	}
+	if len(w.gh.digests) != 1 {
+		t.Fatalf("digests = %v, attendu un digest malgré l'incident", w.gh.digests)
+	}
+	body := fmt.Sprint(w.gh.digests[0]["body"])
+	if !strings.Contains(body, "1 incident") || !strings.Contains(body, "#7") || strings.Contains(body, "préparation du clone") {
+		t.Fatalf("digest = %q, attendu l'incident compté sans son détail, et le ticket rendu", body)
 	}
 }
 
@@ -262,6 +294,33 @@ func TestEmptyQueueRunsAllStagesAsNoOps(t *testing.T) {
 
 	if !strings.Contains(stdout, "rien à publier") || len(w.gh.comments) != 0 {
 		t.Fatalf("rapport = %q, commentaires = %v", stdout, w.gh.comments)
+	}
+	if len(w.gh.digests) != 1 || !strings.Contains(fmt.Sprint(w.gh.digests[0]["body"]), "Aucun ticket prêt éligible") {
+		t.Fatalf("digests = %v, attendu un digest de file vide", w.gh.digests)
+	}
+}
+
+func TestPublishNotifiesDiscordWithTheDigestLink(t *testing.T) {
+	var sent []string
+	hook := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		var body struct{ Content string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sent = append(sent, body.Content)
+		rw.WriteHeader(http.StatusNoContent)
+	}))
+	defer hook.Close()
+	w := newWorld(t)
+	t.Setenv(cli.WebhookEnv, hook.URL+"/api/webhooks/1/secret")
+
+	w.selectStage(t)
+	w.agentStage(t, "commit")
+	w.publishStage(t)
+
+	if len(sent) != 1 || !strings.Contains(sent[0], "https://github.example/o/a/issues/101") || strings.Contains(sent[0], "Ajouter f") {
+		t.Fatalf("notifications = %q, attendu le lien du digest sans le titre du ticket", sent)
+	}
+	if body := fmt.Sprint(w.gh.digests[0]["body"]); !strings.Contains(body, "Notification Discord : envoyée") {
+		t.Fatalf("digest = %q", body)
 	}
 }
 

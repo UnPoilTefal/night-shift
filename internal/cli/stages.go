@@ -64,28 +64,39 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 	f := github.New(*apiURL, token)
 	report, tasks, err := pass.Select(ctx, cfg, f)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "select : %v\n", err)
+		report.Errors = append(report.Errors, err.Error())
 	}
+	reserved := false
 	for _, task := range tasks {
-		if perr := prepare(ctx, *d, gitrepo.Remote{BaseURL: *gitURL, Token: token}, &task); perr != nil {
-			tr, serr := pass.Settle(ctx, cfg, f, nil, task, harness.Result{Outcome: harness.Failed, Reason: "préparation du clone : " + perr.Error()})
-			if serr != nil {
-				_, _ = fmt.Fprintf(stderr, "select : %v\n", serr)
-			}
-			report.Tickets = append(report.Tickets, tr)
-			err = perr
+		perr := prepare(ctx, *d, gitrepo.Remote{BaseURL: *gitURL, Token: token}, &task)
+		if perr == nil {
+			reserved = true
+			continue
 		}
+		report.Errors = append(report.Errors, "préparation du clone : "+perr.Error())
+		tr, serr := pass.Settle(ctx, cfg, f, nil, task, harness.Result{Outcome: harness.Failed, Reason: "préparation du clone : " + perr.Error()})
+		if serr != nil {
+			report.Errors = append(report.Errors, serr.Error())
+			continue
+		}
+		report.Tickets = append(report.Tickets, tr)
+	}
+	for _, e := range report.Errors {
+		_, _ = fmt.Fprintf(stderr, "select : %s\n", e)
 	}
 	printRepos(stdout, report)
 	printTickets(stdout, report.Tickets)
 	printRetriaged(stdout, report.Retriaged)
-	switch {
-	case len(tasks) == 0:
-		_, _ = fmt.Fprintln(stdout, "aucun ticket prêt éligible")
-	case err == nil:
+	if reserved {
 		_, _ = fmt.Fprintf(stdout, "ticket %s#%d réservé, confié à l'agent\n", tasks[0].Ticket.Repo, tasks[0].Ticket.Number)
+	} else {
+		_, _ = fmt.Fprintln(stdout, "aucun ticket prêt éligible")
 	}
-	if err != nil {
+	// Les incidents vont au rapport plutôt qu'au code de sortie : un échec
+	// ici arrêterait le pod avant la Publication, et la passe n'aurait pas de
+	// digest. La Publication publie le digest, puis échoue à son tour.
+	if err := d.WriteReport(report); err != nil {
+		_, _ = fmt.Fprintf(stderr, "select : écriture du rapport : %v\n", err)
 		return 1
 	}
 	return 0
@@ -195,9 +206,12 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "publish : %v\n", err)
 		return 1
 	}
+	ctx, stop := signalContext()
+	defer stop()
+	f := github.New(*apiURL, token)
 	if !ok {
 		_, _ = fmt.Fprintln(stdout, "aucun ticket réservé, rien à publier")
-		return 0
+		return publishDigest(ctx, f, d, nil, stdout, stderr)
 	}
 
 	res, ok, err := d.ReadResult()
@@ -208,17 +222,14 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 		res = harness.Result{Outcome: harness.Failed, Reason: "l'agent n'a rendu aucun résultat : passe interrompue (durée maximale ou arrêt du conteneur)"}
 	}
 
-	ctx, stop := signalContext()
-	defer stop()
-	f := github.New(*apiURL, token)
 	cfg := pass.Config{ID: task.PassID, Now: time.Now}
 	tr, err := pass.Settle(ctx, cfg, f, publication.Git{Forge: f, GitURL: *gitURL, Token: token}, task, res)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "publish : %v\n", err)
 		return 1
 	}
-	printReport(stdout, pass.Report{ID: task.PassID, Tickets: []pass.TicketReport{tr}})
-	return 0
+	printTickets(stdout, []pass.TicketReport{tr})
+	return publishDigest(ctx, f, d, &tr, stdout, stderr)
 }
 
 func forgeToken(cmd string, stderr io.Writer) (string, bool) {
