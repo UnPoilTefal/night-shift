@@ -62,3 +62,18 @@ jobs:
         run: go install sigs.k8s.io/kind@v0.33.0
       - name: Tests de bout en bout
         run: make test-e2e
+
+  images:
+    name: Images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Construction des images
+        run: make images IMAGE_VERSION=ci
+      - name: Test de fumée (outils, version, utilisateur non root, skills)
+        run: make test-images IMAGE_VERSION=ci
+      - name: Scan des secrets
+        run: make scan-images IMAGE_VERSION=ci

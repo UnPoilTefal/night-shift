@@ -160,6 +160,36 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/default > dist/install.yaml
 
+##@ Images (generic base and Go layer)
+
+# IMAGE_VERSION est injectée dans le binaire et sert de tag ; la CI la tire du
+# tag de release.
+IMAGE_VERSION ?= dev
+IMAGE_REGISTRY ?= ghcr.io/unpoiltefal
+# PLATFORM_UNDER_TEST choisit la plateforme testée d'une image multi-arch.
+PLATFORM_UNDER_TEST ?=
+# Scanner de secrets, épinglé par digest.
+TRIVY_IMAGE ?= aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+
+.PHONY: images
+images: ## Build the base and Go images for the local platform.
+	VERSION=$(IMAGE_VERSION) REGISTRY=$(IMAGE_REGISTRY) $(CONTAINER_TOOL) buildx bake --load
+
+.PHONY: test-images
+test-images: ## Smoke-test the images (tools, version, non-root user, skills).
+	CONTAINER_TOOL=$(CONTAINER_TOOL) PLATFORM=$(PLATFORM_UNDER_TEST) hack/test-images.sh $(IMAGE_REGISTRY)/night-shift:$(IMAGE_VERSION) $(IMAGE_REGISTRY)/night-shift-go:$(IMAGE_VERSION) $(IMAGE_VERSION)
+
+.PHONY: push-images
+push-images: ## Build and push the multi-arch images, tagged $(IMAGE_VERSION) only.
+	VERSION=$(IMAGE_VERSION) REGISTRY=$(IMAGE_REGISTRY) $(CONTAINER_TOOL) buildx bake --push --set '*.platform=linux/amd64,linux/arm64'
+
+.PHONY: scan-images
+scan-images: ## Scan the images for secrets; fails on any finding.
+	for img in night-shift night-shift-go; do \
+		$(CONTAINER_TOOL) run --rm -v /var/run/docker.sock:/var/run/docker.sock $(TRIVY_IMAGE) \
+			image --scanners secret --exit-code 1 --no-progress $(IMAGE_REGISTRY)/$$img:$(IMAGE_VERSION) || exit 1; \
+	done
+
 ##@ Deployment
 
 ifndef ignore-not-found
