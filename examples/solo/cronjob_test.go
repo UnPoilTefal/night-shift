@@ -105,7 +105,7 @@ func TestAgentContainerReceivesNoForgeToken(t *testing.T) {
 	}
 
 	for _, e := range agent.Env {
-		if slices.Contains([]string{"NIGHT_SHIFT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}, e.Name) {
+		if slices.Contains([]string{"NIGHT_SHIFT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "NIGHT_SHIFT_DISCORD_WEBHOOK"}, e.Name) {
 			t.Errorf("l'agent reçoit la variable %s", e.Name)
 		}
 		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && slices.Contains(secrets, e.ValueFrom.SecretKeyRef.Name) {

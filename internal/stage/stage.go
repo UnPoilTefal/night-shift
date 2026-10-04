@@ -2,8 +2,9 @@
 // passe du palier solo : sélection, agent, Publication. Deux volumes :
 //
 //   - State, écrit par la sélection et monté en lecture seule ailleurs,
-//     porte la tâche (ticket réservé, brief, commit de base) : l'agent ne peut
-//     pas changer le ticket que la Publication rendra ;
+//     porte la tâche (ticket réservé, brief, commit de base) et le rapport de
+//     la sélection : l'agent ne peut changer ni le ticket que la Publication
+//     rendra, ni le digest qu'elle publiera ;
 //   - Work porte le clone (repo/) que l'agent modifie, et sa sortie (out/) :
 //     result.json et la série patches/NNNN.patch.
 //
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"github.com/UnPoilTefal/night-shift/internal/harness"
+	"github.com/UnPoilTefal/night-shift/internal/pass"
 )
 
 // Bornes de la sortie de l'agent.
@@ -46,6 +48,7 @@ func (d Dirs) RepoDir() string { return filepath.Join(d.Work, "repo") }
 func (d Dirs) OutDir() string { return filepath.Join(d.Work, "out") }
 
 func (d Dirs) taskFile() string   { return filepath.Join(d.State, "task.json") }
+func (d Dirs) reportFile() string { return filepath.Join(d.State, "report.json") }
 func (d Dirs) resultFile() string { return filepath.Join(d.OutDir(), "result.json") }
 func (d Dirs) patchDir() string   { return filepath.Join(d.OutDir(), "patches") }
 
@@ -72,6 +75,33 @@ func (d Dirs) ReadTask() (harness.Task, bool, error) {
 		return t, false, fmt.Errorf("tâche illisible : %w", err)
 	}
 	return t, true, nil
+}
+
+// WriteReport enregistre le rapport de la sélection, que la Publication
+// complète pour publier le digest.
+func (d Dirs) WriteReport(r pass.Report) error {
+	b, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(d.reportFile(), b, 0o644) // #nosec G306 -- lu par la Publication, sans secret
+}
+
+// ReadReport relit le rapport de la sélection ; ok vaut false si elle n'en a
+// écrit aucun.
+func (d Dirs) ReadReport() (pass.Report, bool, error) {
+	var r pass.Report
+	b, err := os.ReadFile(d.reportFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return r, false, nil
+	}
+	if err != nil {
+		return r, false, err
+	}
+	if err := json.Unmarshal(b, &r); err != nil {
+		return r, false, fmt.Errorf("rapport de la sélection illisible : %w", err)
+	}
+	return r, true, nil
 }
 
 type result struct {

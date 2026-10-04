@@ -73,13 +73,15 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 	// cours sont tout de même rendus, avec un contexte de nettoyage propre.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	report, err := pass.Run(ctx, cfg, github.New(*apiURL, token), harness.Stub{}, nil)
+	f := github.New(*apiURL, token)
+	report, err := pass.Run(ctx, cfg, f, harness.Stub{}, nil)
 	printReport(stdout, report)
+	code := digestCode(ctx, f, report, stdout, stderr, "pass")
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "pass : %v\n", err)
 		return 1
 	}
-	return 0
+	return code
 }
 
 func printReport(w io.Writer, r pass.Report) {

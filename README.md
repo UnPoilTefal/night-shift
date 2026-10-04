@@ -75,7 +75,7 @@ A repository's **trust level** (*palier de confiance*: tickets per pass, draft o
 
 ## Roadmap
 
-Status: **a pass runs a real headless `claude -p` agent in three containers, on a brief built from trusted authors only, and opens draft PRs; container images are built and smoke-tested in CI, and the digest comes next.**
+Status: **a pass runs a real headless `claude -p` agent in three containers, on a brief built from trusted authors only, opens draft PRs and ends with a digest; images are published on each release. CI rounds and outcomes come next.**
 
 **Solo tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/2))
 
@@ -85,7 +85,8 @@ Status: **a pass runs a real headless `claude -p` agent in three containers, on 
 - [x] Real `claude -p` harness, with publication of a draft PR ([#6](https://github.com/UnPoilTefal/night-shift/issues/6))
 - [x] Trusted-author filtering: a third-party comment after the brief sends the ticket back to triage ([#7](https://github.com/UnPoilTefal/night-shift/issues/7))
 - [x] Container images: a generic base and a Go layer, published on each release ([#11](https://github.com/UnPoilTefal/night-shift/issues/11))
-- [ ] Digest, CI rounds, outcomes ([#8](https://github.com/UnPoilTefal/night-shift/issues/8) to [#10](https://github.com/UnPoilTefal/night-shift/issues/10))
+- [x] Pass digest: a summary comment per ticket, a digest issue per opted-in repository, a short Discord notification ([#8](https://github.com/UnPoilTefal/night-shift/issues/8))
+- [ ] CI rounds, outcomes and weekly digest ([#9](https://github.com/UnPoilTefal/night-shift/issues/9), [#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 
 **Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
 
@@ -115,8 +116,9 @@ NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift select --repo owner/repo --state /sta
 CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state --work /work --timeout 25m
 
 # 3. Publication (forge token, no model): apply the commit series on agent/<n>-<slug>,
-#    push it, open a draft PR, and hand the ticket back in an explicit state.
-NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift publish --state /state --work /work
+#    push it, open a draft PR, hand the ticket back in an explicit state, then publish the digest.
+#    NIGHT_SHIFT_DISCORD_WEBHOOK is optional.
+NIGHT_SHIFT_GITHUB_TOKEN=… NIGHT_SHIFT_DISCORD_WEBHOOK=… ./night-shift publish --state /state --work /work
 ```
 
 | Agent outcome | Ticket ends up |
@@ -125,7 +127,14 @@ NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift publish --state /state --work /work
 | Brief not enough, unmet precondition, unnamed dependency | `needs-info`, with the agent's reason |
 | Failure, timeout, crash | `ready-for-human`, with a mention of the interruption |
 
-[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment: a `CronJob` whose pod runs `select` and `agent` as init containers and `publish` as its container, with the forge token mounted only in the first and last. A test in the repository keeps it that way. The egress proxy and transcript retention belong to your deployment. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
+Each ticket gets a summary comment: what was done, cost, duration and its provisional **outcome**. The pass then ends with its **digest**:
+
+- **Digest issue**: one per repository the pass walked, even when its queue was empty, and the issue says so. It lists the processed tickets by number, with provisional outcome, draft PR, duration and cost, plus the tickets sent back to triage, the pass duration and the agents' cost. A repository left out (no opt-in, invalid opt-in) or unreachable never gets one.
+- **What stays inside**: anything that does not concern a repository never leaves the cluster: which repositories were left out and why, and the details of incidents. Today they live in the job logs; an in-cluster view of past passes is planned.
+- **Incidents**: if part of the pass fails (a reservation, a clone), `select` records it instead of exiting, so the pod still reaches publication. The digest counts the incidents without their details, then `publish` exits with an error so that the job shows the failure.
+- **Discord notification** (optional): it holds only counters (tickets, triage, incidents, repositories left out or unreachable) and links to the digest issues; it never names a repository left out, never carries an error message or ticket content, and mentions nobody. The egress proxy must let `publish` reach `discord.com`. Without a webhook, the pass still succeeds and the digest says the notification is not configured. If the webhook fails, the digest issues get a comment saying so.
+
+[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment: a `CronJob` whose pod runs `select` and `agent` as init containers and `publish` as its container, with the forge token and the Discord webhook mounted only in the trusted steps. A test in the repository keeps it that way. The egress proxy and transcript retention belong to your deployment. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
 
 ### Container images
 

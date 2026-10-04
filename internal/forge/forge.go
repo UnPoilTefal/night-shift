@@ -1,6 +1,6 @@
 // Package forge définit ce dont une passe a besoin d'une forge (GitHub,
 // GitLab…) : lister les tickets prêts, lire un fichier du dépôt, poser des
-// labels, commenter et ouvrir une PR en brouillon. Chaque forge fournit son adaptateur.
+// labels, commenter, ouvrir une issue de digest et une PR en brouillon. Chaque forge fournit son adaptateur.
 package forge
 
 import (
@@ -69,6 +69,8 @@ type Forge interface {
 	RemoveLabel(ctx context.Context, repo string, number int, label string) error
 	// Comment ajoute un commentaire à un ticket.
 	Comment(ctx context.Context, repo string, number int, body string) error
+	// CreateIssue ouvre une issue et rend son numéro et son URL.
+	CreateIssue(ctx context.Context, repo, title, body string) (number int, url string, err error)
 	// OpenDraftPR ouvre une PR en brouillon et rend son URL. Aucune méthode ne
 	// permet de la passer en prête, de la merger ni de l'approuver.
 	OpenDraftPR(ctx context.Context, repo string, pr PullRequest) (url string, err error)

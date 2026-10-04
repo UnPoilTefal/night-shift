@@ -65,6 +65,7 @@ func launchTask(t *testing.T, mode string, edit func(*claude.Claude), task harne
 			"FAKE_CLAUDE=" + mode, "FAKE_CLAUDE_LOG=" + log, "CLAUDE_CONFIG_DIR=" + cfg,
 			"CLAUDE_CODE_OAUTH_TOKEN=oauth-secret", "ANTHROPIC_API_KEY=api-secret",
 			"GH_TOKEN=forge-secret", "GITHUB_TOKEN=forge-secret", "NIGHT_SHIFT_GITHUB_TOKEN=forge-secret",
+			"NIGHT_SHIFT_DISCORD_WEBHOOK=https://discord.example/webhook-secret",
 		},
 	}
 	if edit != nil {
@@ -174,8 +175,8 @@ func TestAuthSwitchIsConfigurationOnlyAndForgeTokensNeverReachTheAgent(t *testin
 			if !strings.Contains(env, want[0]) || strings.Contains(env, want[1]+"=") {
 				t.Fatalf("environnement de l'agent :\n%s\nattendu %s sans %s", env, want[0], want[1])
 			}
-			if strings.Contains(env, "forge-secret") {
-				t.Fatalf("un jeton de forge a atteint l'agent :\n%s", env)
+			if strings.Contains(env, "forge-secret") || strings.Contains(env, "webhook-secret") {
+				t.Fatalf("un secret de la passe a atteint l'agent :\n%s", env)
 			}
 		})
 	}

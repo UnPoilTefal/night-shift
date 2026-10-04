@@ -175,6 +175,18 @@ func (c *Client) Comment(ctx context.Context, repo string, number int, body stri
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/issues/%d/comments", repo, number), map[string]string{"body": body}, nil)
 }
 
+// CreateIssue implémente forge.Forge.
+func (c *Client) CreateIssue(ctx context.Context, repo, title, body string) (int, string, error) {
+	var out struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/repos/"+repo+"/issues", map[string]string{"title": title, "body": body}, &out); err != nil {
+		return 0, "", err
+	}
+	return out.Number, out.HTMLURL, nil
+}
+
 // OpenDraftPR implémente forge.Forge.
 func (c *Client) OpenDraftPR(ctx context.Context, repo string, pr forge.PullRequest) (string, error) {
 	body := map[string]any{"title": pr.Title, "head": pr.Head, "base": pr.Base, "body": pr.Body, "draft": true}

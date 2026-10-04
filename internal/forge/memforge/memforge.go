@@ -26,15 +26,16 @@ type Forge struct {
 	// nom ; une erreur rendue fait échouer l'opération (pannes simulées).
 	Fail func(op string) error
 
-	mu     sync.Mutex
-	files  map[string]map[string][]byte
-	issues map[string][]*Issue
-	pulls  map[string][]forge.PullRequest
+	mu      sync.Mutex
+	files   map[string]map[string][]byte
+	issues  map[string][]*Issue
+	created map[string][]int
+	pulls   map[string][]forge.PullRequest
 }
 
 // New crée une forge vide.
 func New() *Forge {
-	return &Forge{files: map[string]map[string][]byte{}, issues: map[string][]*Issue{}, pulls: map[string][]forge.PullRequest{}}
+	return &Forge{files: map[string]map[string][]byte{}, issues: map[string][]*Issue{}, created: map[string][]int{}, pulls: map[string][]forge.PullRequest{}}
 }
 
 // SetFile place un fichier sur la branche par défaut d'un dépôt.
@@ -143,6 +144,36 @@ func (f *Forge) Comment(ctx context.Context, repo string, number int, body strin
 	}
 	i.Comments = append(i.Comments, body)
 	return nil
+}
+
+// CreateIssue implémente forge.Forge ; l'URL rendue est
+// memforge://<dépôt>/issues/<n>.
+func (f *Forge) CreateIssue(ctx context.Context, repo, title, body string) (int, string, error) {
+	if err := f.hook(ctx, "CreateIssue"); err != nil {
+		return 0, "", err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 1
+	for _, i := range f.issues[repo] {
+		n = max(n, i.Number+1)
+	}
+	f.issues[repo] = append(f.issues[repo], &Issue{Ticket: forge.Ticket{Repo: repo, Number: n, Title: title, Body: body}})
+	f.created[repo] = append(f.created[repo], n)
+	return n, fmt.Sprintf("memforge://%s/issues/%d", repo, n), nil
+}
+
+// CreatedIssues rend l'état des issues ouvertes par CreateIssue sur un
+// dépôt, dans l'ordre de création.
+func (f *Forge) CreatedIssues(repo string) []Issue {
+	f.mu.Lock()
+	numbers := slices.Clone(f.created[repo])
+	f.mu.Unlock()
+	out := make([]Issue, 0, len(numbers))
+	for _, n := range numbers {
+		out = append(out, f.Issue(repo, n))
+	}
+	return out
 }
 
 // OpenDraftPR implémente forge.Forge ; l'URL rendue est
