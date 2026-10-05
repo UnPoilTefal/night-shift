@@ -61,7 +61,7 @@ func runPass(t *testing.T, f *memforge.Forge, n digest.Notifier, h harness.Harne
 	t.Helper()
 	r, err := pass.Run(context.Background(), pass.Config{
 		Repos: repos, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
-		CIPoll: time.Millisecond, CITimeout: 10 * time.Millisecond,
+		CI: pass.CIWait{Poll: time.Millisecond, Timeout: 10 * time.Millisecond, Settle: time.Millisecond},
 	}, f, h, fixedPublisher("https://forge/o/a/pull/12"))
 	if err != nil {
 		t.Fatal(err)

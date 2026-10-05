@@ -115,10 +115,11 @@ NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift select --repo owner/repo --state /sta
 
 # 2. Agent (no forge token; refuses to start if one is present): run /implement through claude -p.
 #    --auth subscription reads CLAUDE_CODE_OAUTH_TOKEN, --auth api-key reads ANTHROPIC_API_KEY.
-CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state --work /work --timeout 25m
+CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state --work /work --timeout 30m
 
 # 3. Publication (forge token, no model): apply the commit series on agent/<n>-<slug>,
-#    push it, open a draft PR and wait for its CI (--ci-timeout, 10m by default).
+#    push it, open a draft PR and wait for its CI (--ci-timeout, 10m by default). The verdict waits
+#    until every check has stayed completed for --ci-settle (1m), so a slow workflow is not missed.
 #    Green: hand the ticket back in an explicit state, then publish the digest.
 #    Red: prepare the retry in /state2 and /work2 instead (fresh clone of the branch, failing checks).
 #    NIGHT_SHIFT_DISCORD_WEBHOOK is optional.
@@ -127,7 +128,7 @@ NIGHT_SHIFT_GITHUB_TOKEN=… NIGHT_SHIFT_DISCORD_WEBHOOK=… ./night-shift publi
 
 # 4. Retry (no forge token): the agent adds fixing commits on top of the published branch.
 #    With no retry prepared, it does nothing.
-CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state2 --work /work2 --timeout 25m
+CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state2 --work /work2 --timeout 30m
 
 # 5. Retry publication: push on the same PR, wait for CI, hand the ticket back and publish the digest.
 #    With no retry prepared, the first publication already did, and it does nothing.

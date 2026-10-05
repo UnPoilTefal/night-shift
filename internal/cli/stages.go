@@ -199,12 +199,13 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	followUp := fs.Bool("follow-up", false, "publie un tour de relance : sans tâche, le tour précédent a déjà rendu le ticket et publié le digest")
 	ciTimeout := fs.Duration("ci-timeout", pass.DefaultCITimeout, "durée maximale de l'attente de la CI de la PR")
 	ciPoll := fs.Duration("ci-poll", pass.DefaultCIPoll, "intervalle entre deux lectures de la CI")
+	ciSettle := fs.Duration("ci-settle", pass.DefaultCISettle, "durée pendant laquelle tous les checks doivent rester terminés avant le verdict")
 	apiURL := fs.String("api-url", github.DefaultBaseURL, "URL de l'API REST GitHub")
 	gitURL := fs.String("git-url", DefaultGitURL, "base des adresses de clone")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if d.State == "" || d.Work == "" || (next.State == "") != (next.Work == "") || *ciTimeout <= 0 || *ciPoll <= 0 {
+	if d.State == "" || d.Work == "" || (next.State == "") != (next.Work == "") || *ciTimeout <= 0 || *ciPoll <= 0 || *ciSettle <= 0 {
 		_, _ = fmt.Fprintln(stderr, "publish : --state et --work sont requis, --next-state et --next-work vont ensemble, et les durées de CI sont positives")
 		return 2
 	}
@@ -237,23 +238,23 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 		res = harness.Result{Outcome: harness.Failed, Reason: "l'agent n'a rendu aucun résultat : passe interrompue (durée maximale ou arrêt du conteneur)"}
 	}
 
-	cfg := pass.Config{ID: task.PassID, Now: time.Now, Rounds: 1, CITimeout: *ciTimeout, CIPoll: *ciPoll}
+	cfg := pass.Config{ID: task.PassID, Now: time.Now, Rounds: 1, CI: pass.CIWait{Timeout: *ciTimeout, Poll: *ciPoll, Settle: *ciSettle}}
 	if next.State != "" {
 		cfg.Rounds = pass.MaxRounds
 	}
 	remote := gitrepo.Remote{BaseURL: *gitURL, Token: token}
 	fu := pass.Follow(ctx, cfg, f, publication.Git{Forge: f, GitURL: *gitURL, Token: token}, task, res)
 	if fu.Retry {
-		perr := prepareRetry(ctx, *d, next, remote, fu.Task)
+		perr := prepareRetry(ctx, *d, next, remote, fu.Next)
 		if perr == nil {
 			_, _ = fmt.Fprintf(stdout, "ticket %s#%d : CI rouge (%d check(s) en échec), relance de l'agent au tour %d\n",
-				task.Ticket.Repo, task.Ticket.Number, len(fu.Task.CIFailures), fu.Task.Round)
+				task.Ticket.Repo, task.Ticket.Number, len(fu.Next.CIFailures), fu.Next.Round)
 			return 0
 		}
+		// Faute de relance, la CI rouge de ce tour est définitive : Follow en
+		// a préparé le rendu.
 		_, _ = fmt.Fprintf(stderr, "publish : préparation de la relance : %v\n", perr)
-		// Faute de relance, la CI rouge de ce tour est définitive.
-		fu.Task.Round = task.Round
-		fu.Result = harness.Result{Outcome: pass.CIFailed, Reason: "CI rouge, et la relance de l'agent n'a pas pu être préparée.\n\n" + pass.Failures(fu.Task.CIFailures)}
+		fu.Result.Reason = "La relance de l'agent n'a pas pu être préparée.\n\n" + fu.Result.Reason
 	}
 
 	tr, err := pass.Settle(ctx, cfg, f, fu.Task, fu.Result)

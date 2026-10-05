@@ -212,7 +212,7 @@ func runWith(t *testing.T, f *memforge.Forge, h harness.Harness, p pass.Publishe
 	t.Helper()
 	r, err := pass.Run(context.Background(), pass.Config{
 		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
-		CIPoll: time.Millisecond, CITimeout: 20 * time.Millisecond,
+		CI: pass.CIWait{Poll: time.Millisecond, Timeout: 20 * time.Millisecond, Settle: time.Millisecond},
 	}, f, h, p)
 	if err != nil {
 		t.Fatal(err)
