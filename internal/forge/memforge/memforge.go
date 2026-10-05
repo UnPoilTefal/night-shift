@@ -155,7 +155,7 @@ func (f *Forge) Comment(ctx context.Context, repo string, number int, body strin
 		p.Comments = append(p.Comments, body)
 		return nil
 	}
-	return fmt.Errorf("ticket %s#%d inconnu", repo, number)
+	return fmt.Errorf("ticket ou PR %s#%d inconnu", repo, number)
 }
 
 // CreateIssue implémente forge.Forge ; l'URL rendue est

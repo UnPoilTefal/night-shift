@@ -55,6 +55,11 @@ L'étape de confiance, sans modèle, qui transforme le patch produit par l'agent
 _FR_: publication
 _Avoid_: push, livraison
 
+**Round**:
+Un passage de l'agent sur un ticket réservé, suivi de la publication de sa série et de l'attente de la CI de la PR. Une passe en fait au plus deux par ticket : le second, la relance, n'a lieu que si la CI du premier échoue, et repart de la branche publiée.
+_FR_: tour
+_Avoid_: itération, essai, attempt
+
 **Service identity**:
 L'identité sous laquelle night-shift agit sur la forge (réservation, publication) et auprès du modèle, distincte de celle d'un humain qui le pilote ou dérivée d'elle.
 _FR_: identité de service

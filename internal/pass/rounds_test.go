@@ -69,7 +69,7 @@ func runRounds(t *testing.T, f *memforge.Forge, h harness.Harness, rounds int) (
 	p := &forgePublisher{f: f}
 	r, err := pass.Run(context.Background(), pass.Config{
 		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
-		CIPoll: time.Millisecond, CITimeout: 20 * time.Millisecond, Rounds: rounds,
+		CI: pass.CIWait{Poll: time.Millisecond, Timeout: 50 * time.Millisecond, Settle: 5 * time.Millisecond}, Rounds: rounds,
 	}, f, h, p)
 	if err != nil {
 		t.Fatal(err)
@@ -220,5 +220,68 @@ func TestAgentStoppingOnSecondRoundHandsTicketBackWithTheDraft(t *testing.T) {
 	}
 	if tr := r.Tickets[0]; tr.PullRequest != "memforge://o/a/pull/8" || tr.CostUSD != 0.5 {
 		t.Fatalf("rapport = %+v", tr)
+	}
+}
+
+func TestLateCheckKeepsCIFromSettlingTooEarly(t *testing.T) {
+	f := ciForge()
+	f.SetChecks("o/a", "head-1", green)
+	f.SetChecks("o/a", "head-2", green)
+	// Un workflow lent ne s'enregistre qu'après la première lecture, quand
+	// le check rapide est déjà vert.
+	reads := 0
+	f.Fail = func(op string) error {
+		if op == "Checks" {
+			if reads++; reads == 2 {
+				f.SetChecks("o/a", "head-1", green, red)
+			}
+		}
+		return nil
+	}
+	h := &roundsHarness{results: []harness.Result{commits(0.5), commits(0.25)}}
+
+	runRounds(t, f, h, 0)
+
+	if len(h.tasks) != 2 {
+		t.Fatalf("l'agent a tourné %d fois : la CI a été jugée avant l'arrivée du check lent", len(h.tasks))
+	}
+}
+
+func TestRetryKeepsTheRoundToSettleIfItCannotHappen(t *testing.T) {
+	f := ciForge()
+	f.SetChecks("o/a", "head-1", red)
+	_, tasks, err := pass.Select(context.Background(), pass.Config{Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now }}, f)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("sélection : %v, %d tâche(s)", err, len(tasks))
+	}
+	res := commits(0.5)
+	res.Transcript, res.SessionID = "/transcripts/s-1.jsonl", "s-1"
+
+	fu := pass.Follow(context.Background(), pass.Config{ID: "pass-test", CI: pass.CIWait{Poll: time.Millisecond, Timeout: 50 * time.Millisecond, Settle: time.Millisecond}},
+		f, &forgePublisher{f: f}, tasks[0], res)
+
+	if !fu.Retry || fu.Next.Round != 2 {
+		t.Fatalf("suite = %+v, attendu une relance au tour 2", fu)
+	}
+	// Si la relance ne peut pas être préparée, ce tour se rend tel quel.
+	if fu.Result.Outcome != pass.CIFailed || fu.Result.Transcript != res.Transcript || fu.Task.Round != 1 || fu.Task.PullRequest == nil {
+		t.Fatalf("rendu de repli = %+v, tâche = %+v", fu.Result, fu.Task)
+	}
+	tr, err := pass.Settle(context.Background(), pass.Config{ID: "pass-test"}, f, fu.Task, fu.Result)
+	if err != nil || tr.CostUSD != 0.5 || tr.Transcript != res.Transcript {
+		t.Fatalf("rapport = %+v, %v ; attendu le coût et le transcript du seul tour", tr, err)
+	}
+}
+
+func TestUnfinishedRetryStillSumsUpTheRedCIOnThePR(t *testing.T) {
+	f := ciForge()
+	f.SetChecks("o/a", "head-1", red)
+	h := &roundsHarness{results: []harness.Result{commits(0.5), {Outcome: harness.Stopped, Reason: "test instable"}}}
+
+	runRounds(t, f, h, 0)
+
+	pr := f.Pull("o/a", 8)
+	if len(pr.Comments) != 1 || !strings.Contains(pr.Comments[0], "--- FAIL: TestF") || !strings.Contains(pr.Comments[0], "test instable") {
+		t.Fatalf("commentaires de la PR = %q, attendu les checks en échec et le motif de la relance inaboutie", pr.Comments)
 	}
 }

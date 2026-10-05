@@ -6,6 +6,7 @@ package forge
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -82,6 +83,20 @@ type Check struct {
 	// résumé, annotations) ; URL renvoie vers son détail.
 	Excerpt string
 	URL     string
+}
+
+// Label rend le nom du check sur une seule ligne.
+func (c Check) Label() string { return strings.Join(strings.Fields(c.Name), " ") }
+
+// Quote rend l'extrait du check en bloc de code Markdown, chaque ligne
+// précédée de indent (au moins quatre espaces) : quel que soit son contenu,
+// l'extrait ne peut pas sortir du bloc.
+func (c Check) Quote(indent string) string {
+	lines := strings.Split(strings.TrimRight(c.Excerpt, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = indent + l
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Forge est le contrat qu'une passe attend d'une forge.

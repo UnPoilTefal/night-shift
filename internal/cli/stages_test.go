@@ -180,7 +180,7 @@ func (w *world) agentOn(t *testing.T, mode, state, work string) {
 func (w *world) publishStage(t *testing.T, extra ...string) string {
 	t.Helper()
 	t.Setenv(cli.TokenEnv, secret)
-	args := append([]string{"publish", "--api-url", w.api, "--git-url", w.remote.Base, "--ci-timeout", "200ms", "--ci-poll", "1ms"}, extra...)
+	args := append([]string{"publish", "--api-url", w.api, "--git-url", w.remote.Base, "--ci-timeout", "200ms", "--ci-poll", "1ms", "--ci-settle", "2ms"}, extra...)
 	if !slices.Contains(extra, "--state") {
 		args = append(args, "--state", w.state, "--work", w.work)
 	}
@@ -298,7 +298,7 @@ func TestFailedCloneHandsTheTicketToAHumanAndThePassStillGetsItsDigest(t *testin
 
 	w.agentStage(t, "commit")
 	t.Setenv(cli.TokenEnv, secret)
-	code, _, _ = run("publish", "--api-url", w.api, "--git-url", w.remote.Base, "--ci-timeout", "200ms", "--ci-poll", "1ms", "--state", w.state, "--work", w.work)
+	code, _, _ = run("publish", "--api-url", w.api, "--git-url", w.remote.Base, "--ci-timeout", "200ms", "--ci-poll", "1ms", "--ci-settle", "2ms", "--state", w.state, "--work", w.work)
 
 	if code != 1 {
 		t.Fatalf("publish : code = %d, attendu 1 pour signaler l'incident", code)
