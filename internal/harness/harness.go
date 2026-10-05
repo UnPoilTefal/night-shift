@@ -35,6 +35,16 @@ type Task struct {
 	// BaseBranch et BaseSHA désignent le commit du dépôt cible sur lequel
 	// l'agent travaille ; la Publication y applique sa série de commits.
 	BaseBranch, BaseSHA string
+	// Round numérote le passage de l'agent sur le ticket, à partir de 1. À
+	// partir du deuxième, l'agent repart de la PR publiée au tour précédent :
+	// BaseSHA est la tête de sa branche et CIFailures les checks qui y
+	// échouent.
+	Round       int
+	PullRequest *forge.Draft
+	CIFailures  []forge.Check
+	// PriorCostUSD et PriorDuration cumulent les tours précédents.
+	PriorCostUSD  float64
+	PriorDuration time.Duration
 }
 
 // Result est le compte rendu structuré d'un passage de l'agent.

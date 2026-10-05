@@ -1,12 +1,14 @@
 // Package pass est l'orchestrateur d'une passe : il parcourt la file des
 // tickets prêts des dépôts adhérents, en réserve au plus un nombre plafonné,
-// les confie au harness et rend chacun dans un état explicite. Il ne connaît
+// les confie au harness, suit la CI de chaque PR publiée en relançant au
+// besoin l'agent, et rend chacun dans un état explicite. Il ne connaît
 // la forge et l'agent qu'à travers leurs adaptateurs.
 package pass
 
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -28,7 +30,28 @@ type Config struct {
 	ID string
 	// Now est l'horloge de la passe.
 	Now func() time.Time
+	// Rounds plafonne les tours de l'agent par ticket, jamais au-delà de
+	// MaxRounds ; zéro vaut MaxRounds.
+	Rounds int
+	// CITimeout borne l'attente de la CI d'un tour, CIPoll espace ses
+	// lectures ; zéro vaut DefaultCITimeout et DefaultCIPoll.
+	CITimeout, CIPoll time.Duration
 }
+
+// MaxRounds plafonne les tours de l'agent sur un ticket : un premier
+// passage, puis une seule relance si la CI de la PR échoue.
+const MaxRounds = 2
+
+// Attente de la CI par défaut.
+const (
+	DefaultCITimeout = 10 * time.Minute
+	DefaultCIPoll    = 30 * time.Second
+)
+
+// CIFailed est l'issue d'un ticket dont la CI échoue encore au dernier tour
+// permis : la PR reste en brouillon et le ticket revient à un humain. Seule
+// la passe la prononce, jamais l'agent.
+const CIFailed harness.Outcome = "ci-failed"
 
 // RepoStatus dit si un dépôt candidat a été parcouru.
 type RepoStatus string
@@ -85,17 +108,27 @@ type Report struct {
 	Errors []string
 }
 
+// Published est ce qu'a produit la Publication d'un tour : la PR en
+// brouillon et le commit poussé en tête de sa branche.
+type Published struct {
+	Draft forge.Draft
+	Head  string
+}
+
 // Publisher est l'étape de Publication : elle applique la série de commits
-// de l'agent sur une branche agent/, la pousse et ouvre la PR en brouillon,
-// dont elle rend l'URL. C'est la seule étape qui écrit du code sur la forge.
+// de l'agent sur une branche agent/, la pousse et ouvre la PR en brouillon.
+// Quand la tâche porte déjà une PR (tour de relance), elle pousse sur sa
+// branche sans en ouvrir d'autre. C'est la seule étape qui écrit du code sur
+// la forge.
 type Publisher interface {
-	Publish(ctx context.Context, task harness.Task, res harness.Result) (pullRequest string, err error)
+	Publish(ctx context.Context, task harness.Task, res harness.Result) (Published, error)
 }
 
 // Run exécute une passe complète dans un seul processus : sélection et
-// réservation, travail de l'agent, puis Publication et rendu de chaque
-// ticket. Le palier solo répartit ces étapes entre trois conteneurs (Select,
-// harness, Settle) pour que l'agent ne côtoie jamais le jeton de forge.
+// réservation, travail de l'agent, Publication et suivi de la CI, relance de
+// l'agent si elle échoue, puis rendu de chaque ticket. Le palier solo répartit
+// ces étapes entre plusieurs conteneurs (Select, harness, Follow et Settle)
+// pour que l'agent ne côtoie jamais le jeton de forge.
 func Run(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, p Publisher) (Report, error) {
 	r, tasks, err := Select(ctx, cfg, f)
 	end := func(err error) (Report, error) {
@@ -107,22 +140,28 @@ func Run(ctx context.Context, cfg Config, f forge.Forge, h harness.Harness, p Pu
 	}
 	if err != nil {
 		for _, t := range tasks {
-			if tr, serr := Settle(ctx, cfg, f, p, t, harness.Result{Outcome: harness.Failed, Reason: "passe interrompue avant le travail de l'agent"}); serr == nil {
+			if tr, serr := Settle(ctx, cfg, f, t, harness.Result{Outcome: harness.Failed, Reason: "passe interrompue avant le travail de l'agent"}); serr == nil {
 				r.Tickets = append(r.Tickets, tr)
 			}
 		}
 		return end(err)
 	}
 	for _, t := range tasks {
-		res, err := h.Run(ctx, t)
-		if err != nil {
-			res = harness.Result{Outcome: harness.Failed, Reason: err.Error()}
+		fu := Followup{Retry: true, Task: t}
+		for fu.Retry {
+			res, err := h.Run(ctx, fu.Task)
+			if err != nil {
+				res = harness.Result{Outcome: harness.Failed, Reason: err.Error()}
+			}
+			fu = Follow(ctx, cfg, f, p, fu.Task, res)
 		}
-		tr, err := Settle(ctx, cfg, f, p, t, res)
+		tr, err := Settle(ctx, cfg, f, fu.Task, fu.Result)
+		if tr.Repo != "" {
+			r.Tickets = append(r.Tickets, tr)
+		}
 		if err != nil {
 			return end(err)
 		}
-		r.Tickets = append(r.Tickets, tr)
 	}
 	return end(nil)
 }
@@ -189,7 +228,7 @@ func Select(ctx context.Context, cfg Config, f forge.Forge) (Report, []harness.T
 			return r, tasks, fmt.Errorf("réservation de %s#%d : %w", t.Repo, t.Number, err)
 		}
 		taken[t.Repo]++
-		tasks = append(tasks, harness.Task{Ticket: relayed(t, trustedAuthors[t.Repo]), Brief: brief, PassID: cfg.ID})
+		tasks = append(tasks, harness.Task{Ticket: relayed(t, trustedAuthors[t.Repo]), Brief: brief, PassID: cfg.ID, Round: 1})
 	}
 	return r, tasks, nil
 }
@@ -289,30 +328,177 @@ const commentPrefix = "night-shift "
 // doivent aboutir même si la passe a été annulée ou a dépassé sa durée.
 const cleanupTimeout = time.Minute
 
-// Settle publie le travail de l'agent sur un ticket réservé, puis le rend
-// dans un état explicite : aucun ticket ne reste en agent-in-progress, sauf
-// si la forge refuse aussi le rendu, ce que l'erreur signale. Sans Publisher,
-// un succès ne peut pas être publié et le ticket est rendu à un humain.
-func Settle(ctx context.Context, cfg Config, f forge.Forge, p Publisher, task harness.Task, res harness.Result) (TicketReport, error) {
+// Followup est la suite d'un tour de l'agent sur un ticket.
+type Followup struct {
+	// Retry demande un nouveau tour de l'agent sur Task : la CI de la PR
+	// échoue et un tour reste permis.
+	Retry bool
+	// Task est la tâche du tour suivant si Retry, sinon celle à rendre,
+	// complétée de la PR publiée.
+	Task harness.Task
+	// Result est le résultat à rendre par Settle quand Retry est faux.
+	Result harness.Result
+}
+
+// Follow publie la série d'un tour réussi, puis suit la CI de la PR jusqu'à
+// son verdict ou jusqu'à cfg.CITimeout. Si elle échoue et qu'un tour reste
+// permis, Follow rend la tâche de la relance : même brief, tête de la PR
+// publiée, checks en échec. Sinon elle rend le résultat à confier à Settle.
+// Un tour qui n'a rien à publier est rendu tel quel.
+func Follow(ctx context.Context, cfg Config, f forge.Forge, p Publisher, task harness.Task, res harness.Result) Followup {
+	done := func(res harness.Result) Followup { return Followup{Task: task, Result: res} }
+	if res.Outcome != harness.Succeeded {
+		return done(res)
+	}
+	switch {
+	case len(res.Patches) == 0:
+		res.Outcome, res.Reason = harness.Failed, "l'agent annonce un succès sans aucun commit"
+		return done(res)
+	case p == nil:
+		res.Outcome, res.Reason = harness.Failed, "aucune Publication n'est configurée"
+		return done(res)
+	}
+	pub, err := p.Publish(ctx, task, res)
+	if err != nil {
+		res.Outcome, res.Reason = harness.Failed, "Publication échouée : "+err.Error()
+		return done(res)
+	}
+	task.PullRequest = &pub.Draft
+
+	checks, settled, err := waitCI(ctx, cfg, f, task.Ticket.Repo, pub.Head)
+	failed := filter(checks, forge.CheckFailed)
+	switch {
+	case len(failed) == 0 && settled:
+		res.Reason = fmt.Sprintf("CI verte au tour %d.\n\n%s", round(task), res.Reason)
+		return done(res)
+	case len(failed) == 0:
+		why := fmt.Sprintf("CI non conclue au bout de %s", ciTimeout(cfg))
+		if pending := filter(checks, forge.CheckPending); len(pending) > 0 {
+			why += ", checks encore en cours : " + names(pending)
+		} else if err != nil {
+			why += " : " + err.Error()
+		}
+		res.Reason = why + " ; à vérifier sur la PR.\n\n" + res.Reason
+		return done(res)
+	case round(task) >= rounds(cfg):
+		task.CIFailures = failed
+		res.Outcome = CIFailed
+		res.Reason = fmt.Sprintf("CI toujours rouge après %d tour(s) de l'agent.\n\n%s", round(task), Failures(failed))
+		return done(res)
+	}
+	next := task
+	next.Round = round(task) + 1
+	next.BaseSHA = pub.Head
+	next.CIFailures = failed
+	next.PriorCostUSD += res.CostUSD
+	next.PriorDuration += res.Duration
+	return Followup{Retry: true, Task: next}
+}
+
+// waitCI lit les checks du commit sha jusqu'à ce qu'ils soient tous
+// terminés, ou jusqu'à l'échéance. settled dit si tous l'étaient ; err est
+// la dernière erreur de lecture, s'il n'y a eu aucune lecture réussie depuis.
+func waitCI(ctx context.Context, cfg Config, f forge.Forge, repo, sha string) (checks []forge.Check, settled bool, err error) {
+	wctx, cancel := context.WithTimeout(ctx, ciTimeout(cfg))
+	defer cancel()
+	tick := time.NewTicker(cmp.Or(cfg.CIPoll, DefaultCIPoll))
+	defer tick.Stop()
+	for {
+		cs, cerr := f.Checks(wctx, repo, sha)
+		if cerr == nil {
+			checks, err = cs, nil
+			if len(cs) > 0 && len(filter(cs, forge.CheckPending)) == 0 {
+				return checks, true, nil
+			}
+		} else if wctx.Err() == nil {
+			err = cerr
+		}
+		select {
+		case <-wctx.Done():
+			return checks, false, err
+		case <-tick.C:
+		}
+	}
+}
+
+// Failures résume des checks en échec pour un humain, avec leur extrait.
+func Failures(checks []forge.Check) string {
+	var b strings.Builder
+	b.WriteString("Checks en échec :\n")
+	for _, c := range checks {
+		fmt.Fprintf(&b, "\n- **%s**", oneLine(c.Name))
+		if c.URL != "" {
+			fmt.Fprintf(&b, " (%s)", oneLine(c.URL))
+		}
+		if c.Excerpt != "" {
+			b.WriteString("\n\n" + indent(c.Excerpt) + "\n")
+		}
+	}
+	return b.String()
+}
+
+// indent met un extrait en bloc de code Markdown, quel que soit son contenu.
+func indent(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = "      " + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+func filter(checks []forge.Check, state forge.CheckState) []forge.Check {
+	var out []forge.Check
+	for _, c := range checks {
+		if c.State == state {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func names(checks []forge.Check) string {
+	var ns []string
+	for _, c := range checks {
+		ns = append(ns, oneLine(c.Name))
+	}
+	return strings.Join(ns, ", ")
+}
+
+// round rend le numéro du tour d'une tâche ; une tâche sans numéro est au
+// premier.
+func round(t harness.Task) int { return max(t.Round, 1) }
+
+func rounds(cfg Config) int {
+	if cfg.Rounds <= 0 {
+		return MaxRounds
+	}
+	return min(cfg.Rounds, MaxRounds)
+}
+
+func ciTimeout(cfg Config) time.Duration { return cmp.Or(cfg.CITimeout, DefaultCITimeout) }
+
+// Settle rend un ticket réservé dans un état explicite, avec le résultat de
+// son dernier tour : aucun ticket ne reste en agent-in-progress, sauf si la
+// forge refuse aussi le rendu, ce que l'erreur signale. Le coût et la durée
+// rapportés cumulent tous les tours. Une CI rouge au dernier tour est aussi
+// résumée en commentaire de la PR, qui reste en brouillon.
+func Settle(ctx context.Context, cfg Config, f forge.Forge, task harness.Task, res harness.Result) (TicketReport, error) {
 	t := task.Ticket
+	res.CostUSD += task.PriorCostUSD
+	res.Duration += task.PriorDuration
 	tr := TicketReport{
 		Repo: t.Repo, Number: t.Number, Title: t.Title,
 		CostUSD: res.CostUSD, Duration: res.Duration, Transcript: res.Transcript,
 	}
-
-	if res.Outcome == harness.Succeeded {
-		switch {
-		case len(res.Patches) == 0:
-			res.Outcome, res.Reason = harness.Failed, "l'agent annonce un succès sans aucun commit"
-		case p == nil:
-			res.Outcome, res.Reason = harness.Failed, "aucune Publication n'est configurée"
-		default:
-			url, err := p.Publish(ctx, task, res)
-			if err != nil {
-				res.Outcome, res.Reason = harness.Failed, "Publication échouée : "+err.Error()
-			}
-			tr.PullRequest = url
-		}
+	draft := ""
+	if task.PullRequest != nil {
+		tr.PullRequest = task.PullRequest.URL
+		draft = "\n\nPR en brouillon : " + task.PullRequest.URL
+	}
+	if r := round(task); r > 1 {
+		draft += fmt.Sprintf(" (%d tours de l'agent)", r)
 	}
 
 	var label, comment string
@@ -322,29 +508,45 @@ func Settle(ctx context.Context, cfg Config, f forge.Forge, p Publisher, task ha
 		// à sa PR en brouillon et ne porte plus de label de cycle de vie.
 		comment = fmt.Sprintf("night-shift (passe %s) : travail terminé, PR en brouillon à relire : %s\n\n%s%s",
 			cfg.ID, tr.PullRequest, res.Reason, accounting(res))
+		if r := round(task); r > 1 {
+			comment += fmt.Sprintf(" ; %d tours de l'agent", r)
+		}
+	case CIFailed:
+		label = forge.LabelHuman
+		comment = fmt.Sprintf("night-shift (passe %s) : la CI échoue encore, la PR reste en brouillon et le ticket revient à un humain.%s\n\n%s%s",
+			cfg.ID, draft, res.Reason, accounting(res))
 	case harness.NeedsInfo:
 		label = forge.LabelNeedsInfo
-		comment = fmt.Sprintf("night-shift (passe %s) : l'agent s'est arrêté, il lui manque une information.\n\nMotif : %s%s",
-			cfg.ID, res.Reason, accounting(res))
+		comment = fmt.Sprintf("night-shift (passe %s) : l'agent s'est arrêté, il lui manque une information.\n\nMotif : %s%s%s",
+			cfg.ID, res.Reason, draft, accounting(res))
 	case harness.Stopped:
 		label = forge.LabelHuman
-		comment = fmt.Sprintf("night-shift (passe %s) : arrêt motivé de l'agent, ticket rendu à un humain.\n\nMotif : %s%s",
-			cfg.ID, res.Reason, accounting(res))
+		comment = fmt.Sprintf("night-shift (passe %s) : arrêt motivé de l'agent, ticket rendu à un humain.\n\nMotif : %s%s%s",
+			cfg.ID, res.Reason, draft, accounting(res))
 	default:
 		res.Outcome = harness.Failed
 		label = forge.LabelHuman
-		comment = fmt.Sprintf("night-shift (passe %s) : traitement interrompu, ticket rendu à un humain.\n\nCause : %s%s",
-			cfg.ID, res.Reason, accounting(res))
+		comment = fmt.Sprintf("night-shift (passe %s) : traitement interrompu, ticket rendu à un humain.\n\nCause : %s%s%s",
+			cfg.ID, res.Reason, draft, accounting(res))
 	}
 	tr.Outcome, tr.Reason = res.Outcome, res.Reason
 	comment += "\n\nRésultat provisoire : " + ProvisionalOutcome(res.Outcome)
 
 	cctx, cancel := cleanupContext(ctx)
 	defer cancel()
-	if err := release(cctx, f, t, label, comment); err != nil {
-		return TicketReport{}, fmt.Errorf("rendu de %s#%d, le ticket peut rester en %s : %w", t.Repo, t.Number, forge.LabelInProgress, err)
+	var errs []error
+	if res.Outcome == CIFailed && task.PullRequest != nil {
+		if err := f.Comment(cctx, t.Repo, task.PullRequest.Number, fmt.Sprintf(
+			"night-shift (passe %s) : la CI échoue encore après %d tour(s) de l'agent. La PR reste en brouillon : à un humain de reprendre.\n\n%s",
+			cfg.ID, round(task), Failures(task.CIFailures))); err != nil {
+			errs = append(errs, fmt.Errorf("commentaire de la PR %s#%d : %w", t.Repo, task.PullRequest.Number, err))
+		}
 	}
-	return tr, nil
+	if err := release(cctx, f, t, label, comment); err != nil {
+		errs = append(errs, fmt.Errorf("rendu de %s#%d, le ticket peut rester en %s : %w", t.Repo, t.Number, forge.LabelInProgress, err))
+		return TicketReport{}, errors.Join(errs...)
+	}
+	return tr, errors.Join(errs...)
 }
 
 // ProvisionalOutcome dit, pour un humain, dans quel état la passe laisse un
@@ -356,6 +558,8 @@ func ProvisionalOutcome(o harness.Outcome) string {
 		return "PR en brouillon à relire"
 	case harness.NeedsInfo:
 		return "rendu en " + forge.LabelNeedsInfo + ", il manque une information"
+	case CIFailed:
+		return "CI rouge, PR en brouillon rendue à un humain (" + forge.LabelHuman + ")"
 	default:
 		return "rendu à un humain (" + forge.LabelHuman + ")"
 	}

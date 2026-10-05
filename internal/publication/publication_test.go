@@ -61,7 +61,7 @@ func TestPublishPushesAgentBranchAndOpensDraft(t *testing.T) {
 	p := publication.Git{Forge: f, GitURL: remote.Base, Token: "ghp_secret"}
 	mainBefore := remote.Out("rev-parse", "main")
 
-	url, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: patches})
+	pub, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: patches})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,8 +86,11 @@ func TestPublishPushesAgentBranchAndOpensDraft(t *testing.T) {
 		t.Fatalf("tags poussés : %q", tags)
 	}
 	prs := f.DraftPRs("o/a")
-	if len(prs) != 1 || url == "" {
-		t.Fatalf("PR ouvertes = %+v, url = %q", prs, url)
+	if len(prs) != 1 || pub.Draft.URL == "" || pub.Draft.Number == 0 || pub.Draft.Branch != branch {
+		t.Fatalf("PR ouvertes = %+v, publiée = %+v", prs, pub)
+	}
+	if got := remote.Out("rev-parse", branch); pub.Head != got {
+		t.Fatalf("tête rendue = %q, attendu la tête poussée %q", pub.Head, got)
 	}
 	if pr := prs[0]; pr.Head != branch || pr.Base != "main" || pr.Title != task.Ticket.Title || !strings.Contains(pr.Body, "#7") || !strings.Contains(pr.Body, "pass-42") {
 		t.Fatalf("PR = %+v", pr)
@@ -158,5 +161,65 @@ func TestUntitledTaskStillOpensATitledDraft(t *testing.T) {
 
 	if pr := f.DraftPRs("o/a")[0]; !strings.Contains(pr.Title, "#7") || pr.Head != "agent/7" {
 		t.Fatalf("PR = %+v, attendu un titre qui nomme le ticket", pr)
+	}
+}
+
+// commitOn rend la série d'un commit qui ajoute name par-dessus sha, comme
+// un agent relancé sur la tête de la PR.
+func commitOn(t *testing.T, remote *testgit.Remote, sha, name string) [][]byte {
+	t.Helper()
+	src := testgit.New(t)
+	src.Git("fetch", "-q", remote.Dir(), "+refs/heads/*:refs/remotes/o/*")
+	src.Git("checkout", "-q", sha)
+	src.Write(name, "package f\n")
+	src.Git("add", "-A")
+	src.Git("-c", "user.name=agent", "-c", "user.email=agent@example.com", "commit", "-q", "-m", "fix: "+name)
+	out := t.TempDir()
+	src.Git("format-patch", "-q", "-o", out, sha+"..HEAD")
+	names, _ := filepath.Glob(filepath.Join(out, "*.patch"))
+	b, err := os.ReadFile(names[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return [][]byte{b}
+}
+
+func TestRetryRoundPushesOnTheSameBranchWithoutANewDraft(t *testing.T) {
+	remote, task, patches := fixture(t)
+	f := memforge.New()
+	p := publication.Git{Forge: f, GitURL: remote.Base}
+	first, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: patches})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	retry := task
+	retry.Round, retry.BaseSHA, retry.PullRequest = 2, first.Head, &first.Draft
+	second, err := p.Publish(context.Background(), retry, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: commitOn(t, remote, first.Head, "h.go")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(f.DraftPRs("o/a")) != 1 || second.Draft != first.Draft {
+		t.Fatalf("PR = %+v puis %+v, %d ouvertes ; attendu la même PR", first.Draft, second.Draft, len(f.DraftPRs("o/a")))
+	}
+	if got := remote.Out("rev-parse", first.Draft.Branch); got != second.Head || remote.Out("rev-parse", second.Head+"~1") != first.Head {
+		t.Fatalf("tête de %s = %s, attendu le commit de relance %s par-dessus %s", first.Draft.Branch, got, second.Head, first.Head)
+	}
+	if log := remote.Out("log", "-1", "--format=%(trailers:only,unfold)", second.Head); !strings.Contains(log, "Night-Shift-Pass: pass-42") {
+		t.Fatalf("trailers du commit de relance : %q", log)
+	}
+}
+
+func TestRetryRoundRefusesABranchOutsideAgentPrefix(t *testing.T) {
+	remote, task, patches := fixture(t)
+	p := publication.Git{Forge: memforge.New(), GitURL: remote.Base}
+	task.Round, task.PullRequest = 2, &forge.Draft{Number: 3, URL: "u", Branch: "main"}
+
+	if _, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Patches: patches}); err == nil {
+		t.Fatal("erreur attendue : la Publication ne pousse que sur agent/")
+	}
+	if got := remote.Out("rev-parse", "main"); got != task.BaseSHA {
+		t.Fatal("la branche main a bougé")
 	}
 }

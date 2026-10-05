@@ -15,6 +15,7 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/gitrepo"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
+	"github.com/UnPoilTefal/night-shift/internal/pass"
 )
 
 // Git publie par git et ouvre la PR par l'adaptateur de forge.
@@ -25,20 +26,29 @@ type Git struct {
 	Token  string
 }
 
-// Publish implémente pass.Publisher.
-func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result) (string, error) {
+// Publish implémente pass.Publisher. Au premier tour, elle crée la branche
+// agent/ sur le commit de base et ouvre la PR ; à une relance, elle ajoute
+// la série par-dessus la tête de la PR et pousse sans forcer.
+func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result) (pass.Published, error) {
 	t := task.Ticket
+	branch := Branch(t)
+	if task.PullRequest != nil {
+		branch = task.PullRequest.Branch
+		if !strings.HasPrefix(branch, "agent/") {
+			return pass.Published{}, fmt.Errorf("branche %q hors du préfixe agent/", branch)
+		}
+	}
 	remote := gitrepo.Remote{BaseURL: g.GitURL, Token: g.Token}
 	tmp, err := os.MkdirTemp("", "night-shift-publish-")
 	if err != nil {
-		return "", err
+		return pass.Published{}, err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 	dir := filepath.Join(tmp, "repo")
 
 	base, head, err := remote.Clone(ctx, t.Repo, dir)
 	if err != nil {
-		return "", err
+		return pass.Published{}, err
 	}
 	if task.BaseBranch != "" {
 		base = task.BaseBranch
@@ -46,9 +56,8 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 	if task.BaseSHA != "" {
 		head = task.BaseSHA
 	}
-	branch := Branch(t)
 	if _, err := remote.Git(ctx, dir, "checkout", "--quiet", "-b", branch, head); err != nil {
-		return "", err
+		return pass.Published{}, err
 	}
 
 	agent := res.Agent
@@ -59,22 +68,29 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 	for i, p := range res.Patches {
 		files[i] = filepath.Join(tmp, fmt.Sprintf("%04d.patch", i+1))
 		if err := os.WriteFile(files[i], p, 0o600); err != nil {
-			return "", err
+			return pass.Published{}, err
 		}
 	}
 	trailers := []string{"interpret-trailers", "--in-place",
 		"--trailer", "Night-Shift-Agent: " + oneLine(agent),
 		"--trailer", "Night-Shift-Pass: " + oneLine(task.PassID)}
 	if _, err := remote.Git(ctx, dir, append(trailers, files...)...); err != nil {
-		return "", err
+		return pass.Published{}, err
 	}
 	if _, err := remote.Git(ctx, dir, append([]string{"am", "--quiet", "--3way", "--keep-cr"}, files...)...); err != nil {
-		return "", fmt.Errorf("la série de l'agent ne s'applique pas : %w", err)
+		return pass.Published{}, fmt.Errorf("la série de l'agent ne s'applique pas : %w", err)
+	}
+	pushed, err := remote.Git(ctx, dir, "rev-parse", "HEAD")
+	if err != nil {
+		return pass.Published{}, err
 	}
 
 	ref := "refs/heads/" + branch
 	if _, err := remote.Git(ctx, dir, "push", "--quiet", "--no-follow-tags", "origin", ref+":"+ref); err != nil {
-		return "", err
+		return pass.Published{}, err
+	}
+	if task.PullRequest != nil {
+		return pass.Published{Draft: *task.PullRequest, Head: pushed}, nil
 	}
 	// La passe efface le titre d'un ticket dont l'auteur n'est pas de
 	// confiance : la PR nomme alors le ticket.
@@ -82,7 +98,7 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 	if title == "" {
 		title = fmt.Sprintf("night-shift : ticket #%d", t.Number)
 	}
-	return g.Forge.OpenDraftPR(ctx, t.Repo, forge.PullRequest{
+	number, url, err := g.Forge.OpenDraftPR(ctx, t.Repo, forge.PullRequest{
 		Head:  branch,
 		Base:  base,
 		Title: title,
@@ -90,6 +106,10 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 			"Elle n'est jamais passée en prête ni mergée par night-shift : à relire par un humain.",
 			t.Number, oneLine(task.PassID), oneLine(agent)),
 	})
+	if err != nil {
+		return pass.Published{}, err
+	}
+	return pass.Published{Draft: forge.Draft{Number: number, URL: url, Branch: branch}, Head: pushed}, nil
 }
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)

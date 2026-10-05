@@ -1,13 +1,23 @@
-# Exemple de passe du palier solo : un CronJob dont le pod enchaîne trois
-# conteneurs qui partagent deux volumes (ADR 0005).
+# Exemple de passe du palier solo : un CronJob dont le pod enchaîne cinq
+# conteneurs, deux tours au plus de l'agent sur le ticket (ADR 0005).
 #
-#   select   (initContainer, jeton de forge)  réserve un ticket, prépare le clone
-#   agent    (initContainer, aucun jeton)      claude -p sur le clone
-#   publish  (conteneur, jeton de forge)       PR en brouillon, rendu du ticket,
-#                                              digest et notification Discord
+#   select         (init, jeton de forge)  réserve un ticket, prépare le clone
+#   agent          (init, aucun jeton)     claude -p sur le clone
+#   publish        (init, jeton de forge)  PR en brouillon, attente de la CI ;
+#                                          verte : rendu du ticket et digest ;
+#                                          rouge : prépare la relance (state2,
+#                                          work2 : clone neuf de la branche)
+#   retry-agent    (init, aucun jeton)     relance de claude -p avec les checks
+#                                          en échec ; sans relance, ne fait rien
+#   retry-publish  (conteneur, jeton)      pousse sur la même PR, attente de la
+#                                          CI, rendu du ticket et digest ; une
+#                                          CI encore rouge laisse la PR en
+#                                          brouillon et le ticket à un humain
 #
-# Le jeton de forge n'est monté que dans select et publish, le webhook
-# Discord que dans publish ; un test du dépôt (examples/solo) le vérifie. Le
+# Il n'y a jamais de troisième tour. Le jeton de forge n'est monté que dans
+# select et les deux publish, le webhook Discord que dans ces derniers ; un
+# test du dépôt (examples/solo) le vérifie. Le jeton doit pouvoir lire les
+# checks et les statuts de commit du dépôt. Le
 # proxy de sortie doit laisser publish joindre discord.com pour la
 # notification. Les images, le proxy de sortie, la politique
 # réseau et la rétention des transcripts relèvent du déploiement : adaptez
@@ -29,9 +39,10 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
-      # Durée maximale de la passe : elle doit dépasser le --timeout de l'agent
-      # pour que publish ait le temps de rendre le ticket.
-      activeDeadlineSeconds: 2100
+      # Durée maximale de la passe : elle doit dépasser la somme des --timeout
+      # des deux agents et des --ci-timeout des deux publish, pour que la
+      # dernière Publication ait le temps de rendre le ticket.
+      activeDeadlineSeconds: 5400
       template:
         spec:
           restartPolicy: Never
@@ -65,7 +76,7 @@ spec:
               image: ghcr.io/unpoiltefal/night-shift-go:latest
               command: ["night-shift"]
               args: ["agent", "--state", "/state", "--work", "/work", "--timeout", "30m", "--auth", "subscription"]
-              env:
+              env: &agentEnv
                 # Abonnement ; pour une clé d'API : --auth api-key et
                 # ANTHROPIC_API_KEY à la place.
                 - name: CLAUDE_CODE_OAUTH_TOKEN
@@ -79,12 +90,12 @@ spec:
                 - {name: transcripts, mountPath: /transcripts}
                 - {name: tmp, mountPath: /tmp}
               securityContext: *hardened
-          containers:
             - name: publish
               image: ghcr.io/unpoiltefal/night-shift:latest
               command: ["night-shift"]
-              args: ["publish", "--state", "/state", "--work", "/work"]
-              env:
+              args: ["publish", "--state", "/state", "--work", "/work", "--ci-timeout", "10m",
+                     "--next-state", "/state2", "--next-work", "/work2"]
+              env: &publishEnv
                 - name: NIGHT_SHIFT_GITHUB_TOKEN
                   valueFrom:
                     secretKeyRef: {name: night-shift-forge, key: token}
@@ -99,11 +110,38 @@ spec:
               volumeMounts:
                 - {name: state, mountPath: /state, readOnly: true}
                 - {name: work, mountPath: /work, readOnly: true}
+                - {name: state2, mountPath: /state2}
+                - {name: work2, mountPath: /work2}
+                - {name: tmp, mountPath: /tmp}
+              securityContext: *hardened
+            - name: retry-agent
+              image: ghcr.io/unpoiltefal/night-shift-go:latest
+              command: ["night-shift"]
+              args: ["agent", "--state", "/state2", "--work", "/work2", "--timeout", "30m", "--auth", "subscription"]
+              env: *agentEnv
+              volumeMounts:
+                - {name: state2, mountPath: /state2, readOnly: true}
+                - {name: work2, mountPath: /work2}
+                - {name: transcripts, mountPath: /transcripts}
+                - {name: tmp, mountPath: /tmp}
+              securityContext: *hardened
+          containers:
+            - name: retry-publish
+              image: ghcr.io/unpoiltefal/night-shift:latest
+              command: ["night-shift"]
+              args: ["publish", "--follow-up", "--state", "/state2", "--work", "/work2", "--ci-timeout", "10m"]
+              env: *publishEnv
+              volumeMounts:
+                - {name: state2, mountPath: /state2, readOnly: true}
+                - {name: work2, mountPath: /work2, readOnly: true}
                 - {name: tmp, mountPath: /tmp}
               securityContext: *hardened
           volumes:
             - {name: state, emptyDir: {}}
             - {name: work, emptyDir: {}}
+            # Volumes du tour de relance, écrits par publish.
+            - {name: state2, emptyDir: {}}
+            - {name: work2, emptyDir: {}}
             - {name: tmp, emptyDir: {}}
             # Transcripts réservés à l'agent, conservés 30 jours par le
             # déploiement.

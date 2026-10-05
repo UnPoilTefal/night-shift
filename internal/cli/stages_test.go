@@ -29,6 +29,12 @@ type fakeGitHub struct {
 	thread []map[string]any
 	// digests sont les issues de digest ouvertes.
 	digests []map[string]any
+	// red est le nombre de commits, dans l'ordre où la CI les voit, dont le
+	// check test échoue ; les suivants passent.
+	red   int
+	heads []string
+	// prComments sont les commentaires postés sur les PR.
+	prComments []string
 }
 
 func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +84,28 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		g.pulls = append(g.pulls, body)
 		w.WriteHeader(http.StatusCreated)
-		_, _ = fmt.Fprintf(w, `{"html_url": "https://github.example/o/a/pull/%d"}`, len(g.pulls))
+		_, _ = fmt.Fprintf(w, `{"number": %d, "html_url": "https://github.example/o/a/pull/%[1]d"}`, len(g.pulls))
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/repos/o/a/issues/") && strings.HasSuffix(r.URL.Path, "/comments"):
+		var body struct{ Body string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		g.prComments = append(g.prComments, body.Body)
+		_, _ = io.WriteString(w, "{}")
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/check-runs"):
+		sha := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/o/a/commits/"), "/check-runs")
+		i := slices.Index(g.heads, sha)
+		if i < 0 {
+			g.heads, i = append(g.heads, sha), len(g.heads)
+		}
+		conclusion, summary := "success", ""
+		if i < g.red {
+			conclusion, summary = "failure", "--- FAIL: TestF"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{{
+			"id": 1, "name": "test", "status": "completed", "conclusion": conclusion, "html_url": "https://ci.example/1",
+			"output": map[string]any{"summary": summary},
+		}}})
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/status"):
+		_, _ = io.WriteString(w, `{"statuses": []}`)
 	default:
 		http.NotFound(w, r)
 	}
@@ -89,6 +116,8 @@ type world struct {
 	api              string
 	remote           *testgit.Remote
 	state, work, log string
+	// state2 et work2 sont les volumes du tour de relance.
+	state2, work2 string
 }
 
 func newWorld(t *testing.T) *world {
@@ -102,6 +131,7 @@ func newWorld(t *testing.T) *world {
 		gh:     &fakeGitHub{labels: []string{"ready-for-agent", "prio:P2"}},
 		remote: testgit.NewRemote(t, "o/a", src),
 		state:  t.TempDir(), work: t.TempDir(), log: t.TempDir(),
+		state2: t.TempDir(), work2: t.TempDir(),
 	}
 	srv := httptest.NewServer(w.gh)
 	t.Cleanup(srv.Close)
@@ -124,6 +154,12 @@ func (w *world) selectStage(t *testing.T) string {
 
 func (w *world) agentStage(t *testing.T, mode string) {
 	t.Helper()
+	w.agentOn(t, mode, w.state, w.work)
+}
+
+// agentOn fait tourner l'étape de l'agent sur les volumes donnés.
+func (w *world) agentOn(t *testing.T, mode, state, work string) {
+	t.Helper()
 	for _, k := range []string{cli.TokenEnv, "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
 		t.Setenv(k, "")
 	}
@@ -135,20 +171,37 @@ func (w *world) agentStage(t *testing.T, mode string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, stdout, stderr := run("agent", "--claude", bin, "--state", w.state, "--work", w.work)
+	code, stdout, stderr := run("agent", "--claude", bin, "--state", state, "--work", work)
 	if code != 0 {
 		t.Fatalf("agent : code %d\n%s\n%s", code, stdout, stderr)
 	}
 }
 
-func (w *world) publishStage(t *testing.T) string {
+func (w *world) publishStage(t *testing.T, extra ...string) string {
 	t.Helper()
 	t.Setenv(cli.TokenEnv, secret)
-	code, stdout, stderr := run("publish", "--api-url", w.api, "--git-url", w.remote.Base, "--state", w.state, "--work", w.work)
+	args := append([]string{"publish", "--api-url", w.api, "--git-url", w.remote.Base, "--ci-timeout", "200ms", "--ci-poll", "1ms"}, extra...)
+	if !slices.Contains(extra, "--state") {
+		args = append(args, "--state", w.state, "--work", w.work)
+	}
+	code, stdout, stderr := run(args...)
 	if code != 0 {
 		t.Fatalf("publish : code %d\n%s\n%s", code, stdout, stderr)
 	}
 	return stdout
+}
+
+// rounds fait tourner les cinq étapes du pod solo : select, agent, publish
+// qui prépare au besoin la relance, l'agent relancé, puis publish du tour
+// de relance. L'agent relancé ajoute un commit de correction.
+func (w *world) rounds(t *testing.T) (first, second string) {
+	t.Helper()
+	w.selectStage(t)
+	w.agentStage(t, "commit")
+	first = w.publishStage(t, "--next-state", w.state2, "--next-work", w.work2)
+	w.agentOn(t, "fix", w.state2, w.work2)
+	second = w.publishStage(t, "--follow-up", "--state", w.state2, "--work", w.work2)
+	return first, second
 }
 
 func (w *world) lifecycle() []string {
@@ -245,7 +298,7 @@ func TestFailedCloneHandsTheTicketToAHumanAndThePassStillGetsItsDigest(t *testin
 
 	w.agentStage(t, "commit")
 	t.Setenv(cli.TokenEnv, secret)
-	code, _, _ = run("publish", "--api-url", w.api, "--git-url", w.remote.Base, "--state", w.state, "--work", w.work)
+	code, _, _ = run("publish", "--api-url", w.api, "--git-url", w.remote.Base, "--ci-timeout", "200ms", "--ci-poll", "1ms", "--state", w.state, "--work", w.work)
 
 	if code != 1 {
 		t.Fatalf("publish : code = %d, attendu 1 pour signaler l'incident", code)
@@ -380,5 +433,96 @@ func TestAgentRefusesToStartWithAForgeToken(t *testing.T) {
 				t.Fatalf("code = %d, stderr = %q", code, stderr)
 			}
 		})
+	}
+}
+
+func TestGreenCIEndsThePassAtTheFirstPublishAndRetryStagesDoNothing(t *testing.T) {
+	w := newWorld(t)
+
+	first, second := w.rounds(t)
+
+	if !strings.Contains(first, "succeeded") || len(w.gh.pulls) != 1 || len(w.gh.digests) != 1 {
+		t.Fatalf("premier publish = %q ; PR = %d, digests = %d", first, len(w.gh.pulls), len(w.gh.digests))
+	}
+	if _, err := os.Stat(filepath.Join(w.state2, "task.json")); err == nil {
+		t.Fatal("aucune relance ne doit être préparée quand la CI est verte")
+	}
+	if !strings.Contains(second, "aucune relance") || len(w.gh.digests) != 1 {
+		t.Fatalf("second publish = %q, digests = %d ; attendu un passage sans effet", second, len(w.gh.digests))
+	}
+}
+
+func TestRedCIRelaunchesTheAgentInFreshStagesOnTheSameBranch(t *testing.T) {
+	w := newWorld(t)
+	w.gh.red = 1
+
+	first, second := w.rounds(t)
+
+	if !strings.Contains(first, "relance") || strings.Contains(first, "digest") {
+		t.Fatalf("premier publish = %q ; attendu une relance, sans digest", first)
+	}
+	if got := w.lifecycle(); len(got) != 0 {
+		t.Fatalf("labels de cycle de vie = %v", got)
+	}
+	if len(w.gh.pulls) != 1 {
+		t.Fatalf("PR ouvertes : %d, attendu une seule", len(w.gh.pulls))
+	}
+	log := w.remote.Out("log", "--format=%s", "main..agent/7-ajouter-f")
+	if log != "fix: h\ntest: y\nfeat: x" {
+		t.Fatalf("historique de la branche :\n%s\nattendu la correction par-dessus la série du premier tour", log)
+	}
+	prompt, err := os.ReadFile(filepath.Join(w.log, "prompt"))
+	if err != nil || !strings.Contains(string(prompt), "tour 2") || !strings.Contains(string(prompt), "--- FAIL: TestF") {
+		t.Fatalf("prompt de la relance = %q", prompt)
+	}
+	if !strings.Contains(second, "succeeded") || len(w.gh.digests) != 1 {
+		t.Fatalf("second publish = %q, digests = %d", second, len(w.gh.digests))
+	}
+	if last := w.gh.comments[len(w.gh.comments)-1]; !strings.Contains(last, "CI verte au tour 2") {
+		t.Fatalf("commentaire final = %q", last)
+	}
+}
+
+func TestRetryVolumesCarryNoForgeToken(t *testing.T) {
+	w := newWorld(t)
+	w.gh.red = 1
+	w.selectStage(t)
+	w.agentStage(t, "commit")
+	w.publishStage(t, "--next-state", w.state2, "--next-work", w.work2)
+
+	for _, root := range []string{w.state2, w.work2} {
+		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(string(b), secret) {
+				t.Errorf("jeton de forge trouvé dans %s", p)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRedCIAfterTheRetryLeavesTheDraftToAHuman(t *testing.T) {
+	w := newWorld(t)
+	w.gh.red = 2
+
+	w.rounds(t)
+
+	if got := w.lifecycle(); !slices.Equal(got, []string{"ready-for-human"}) {
+		t.Fatalf("labels de cycle de vie = %v, attendu [ready-for-human]", got)
+	}
+	if len(w.gh.prComments) != 1 || !strings.Contains(w.gh.prComments[0], "--- FAIL: TestF") {
+		t.Fatalf("commentaires de PR = %q", w.gh.prComments)
+	}
+	if len(w.gh.pulls) != 1 || len(w.gh.digests) != 1 {
+		t.Fatalf("PR = %d, digests = %d", len(w.gh.pulls), len(w.gh.digests))
 	}
 }
