@@ -195,10 +195,10 @@ type spyPublisher struct {
 	res   []harness.Result
 }
 
-func (p *spyPublisher) Publish(_ context.Context, t harness.Task, res harness.Result) (string, error) {
+func (p *spyPublisher) Publish(_ context.Context, t harness.Task, res harness.Result) (pass.Published, error) {
 	p.tasks = append(p.tasks, t)
 	p.res = append(p.res, res)
-	return p.url, p.err
+	return pass.Published{Draft: forge.Draft{Number: 12, URL: p.url, Branch: "agent/7"}, Head: "head"}, p.err
 }
 
 func succeeded() *spyHarness {
@@ -212,6 +212,7 @@ func runWith(t *testing.T, f *memforge.Forge, h harness.Harness, p pass.Publishe
 	t.Helper()
 	r, err := pass.Run(context.Background(), pass.Config{
 		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
+		CIPoll: time.Millisecond, CITimeout: 20 * time.Millisecond,
 	}, f, h, p)
 	if err != nil {
 		t.Fatal(err)

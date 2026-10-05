@@ -15,7 +15,7 @@ Commandes :
   pass      lance une passe sur les tickets prêts des dépôts candidats, sans agent
   select    étape 1 : réserve un ticket et prépare le clone de travail (jeton de forge)
   agent     étape 2 : fait travailler claude -p sur le clone (aucun jeton de forge)
-  publish   étape 3 : publie la série de l'agent en PR brouillon et rend le ticket (jeton de forge)
+  publish   étape 3 : publie la série de l'agent en PR brouillon, suit la CI, prépare une relance ou rend le ticket (jeton de forge)
   zones     check des zones sur le diff d'une PR d'agent
 `
 

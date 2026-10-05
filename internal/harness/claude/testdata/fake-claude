@@ -13,6 +13,9 @@ commit)
 	echo y > g.txt && git add g.txt && git commit -q -m "test: y"
 	mkdir -p "$CLAUDE_CONFIG_DIR/projects/repo" && echo '{}' > "$CLAUDE_CONFIG_DIR/projects/repo/s-1.jsonl"
 	;;
+fix)
+	echo z > h.txt && git add h.txt && git commit -q -m "fix: h"
+	;;
 needs-info)
 	printf 'la dépendance foo n est pas nommée' > "$NIGHT_SHIFT_NEEDS_INFO"
 	echo x > f.txt && git add f.txt && git commit -q -m "wip"

@@ -188,15 +188,135 @@ func (c *Client) CreateIssue(ctx context.Context, repo, title, body string) (int
 }
 
 // OpenDraftPR implémente forge.Forge.
-func (c *Client) OpenDraftPR(ctx context.Context, repo string, pr forge.PullRequest) (string, error) {
+func (c *Client) OpenDraftPR(ctx context.Context, repo string, pr forge.PullRequest) (int, string, error) {
 	body := map[string]any{"title": pr.Title, "head": pr.Head, "base": pr.Base, "body": pr.Body, "draft": true}
 	var out struct {
+		Number  int    `json:"number"`
 		HTMLURL string `json:"html_url"`
 	}
 	if err := c.do(ctx, http.MethodPost, "/repos/"+repo+"/pulls", body, &out); err != nil {
+		return 0, "", err
+	}
+	return out.Number, out.HTMLURL, nil
+}
+
+// MaxExcerpt borne, en caractères, l'extrait rapporté pour un check.
+const MaxExcerpt = 2000
+
+// maxAnnotations borne les annotations lues par check en échec.
+const maxAnnotations = 20
+
+type checkRun struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	HTMLURL    string `json:"html_url"`
+	Output     struct {
+		Title       string `json:"title"`
+		Summary     string `json:"summary"`
+		Text        string `json:"text"`
+		Annotations int    `json:"annotations_count"`
+	} `json:"output"`
+}
+
+// Checks implémente forge.Forge : les check runs (GitHub Actions et autres
+// applications) et les statuts de commit, plus les annotations d'un check
+// run en échec. Le jeton doit pouvoir lire les checks et les statuts.
+func (c *Client) Checks(ctx context.Context, repo, sha string) ([]forge.Check, error) {
+	ref := url.PathEscape(sha)
+	var runs struct {
+		CheckRuns []checkRun `json:"check_runs"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/commits/"+ref+"/check-runs?per_page=100", nil, &runs); err != nil {
+		return nil, err
+	}
+	var out []forge.Check
+	for _, r := range runs.CheckRuns {
+		ch := forge.Check{Name: r.Name, State: runState(r.Status, r.Conclusion), URL: r.HTMLURL}
+		if ch.State == forge.CheckFailed {
+			parts := []string{r.Output.Title, r.Output.Summary, r.Output.Text}
+			if r.Output.Annotations > 0 {
+				notes, err := c.annotations(ctx, repo, r.ID)
+				if err != nil {
+					return nil, err
+				}
+				parts = append(parts, notes)
+			}
+			ch.Excerpt = excerpt(parts...)
+		}
+		out = append(out, ch)
+	}
+
+	var combined struct {
+		Statuses []struct {
+			Context     string `json:"context"`
+			State       string `json:"state"`
+			Description string `json:"description"`
+			TargetURL   string `json:"target_url"`
+		} `json:"statuses"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/commits/"+ref+"/status?per_page=100", nil, &combined); err != nil {
+		return nil, err
+	}
+	for _, s := range combined.Statuses {
+		ch := forge.Check{Name: s.Context, URL: s.TargetURL}
+		switch s.State {
+		case "success":
+			ch.State = forge.CheckPassed
+		case "failure", "error":
+			ch.State, ch.Excerpt = forge.CheckFailed, excerpt(s.Description)
+		default:
+			ch.State = forge.CheckPending
+		}
+		out = append(out, ch)
+	}
+	return out, nil
+}
+
+// runState traduit l'état d'un check run ; une conclusion neutre ou un
+// check sauté ne bloque pas.
+func runState(status, conclusion string) forge.CheckState {
+	if status != "completed" {
+		return forge.CheckPending
+	}
+	switch conclusion {
+	case "success", "neutral", "skipped":
+		return forge.CheckPassed
+	}
+	return forge.CheckFailed
+}
+
+func (c *Client) annotations(ctx context.Context, repo string, id int64) (string, error) {
+	var notes []struct {
+		Path      string `json:"path"`
+		StartLine int    `json:"start_line"`
+		Message   string `json:"message"`
+	}
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/check-runs/%d/annotations?per_page=%d", repo, id, maxAnnotations), nil, &notes); err != nil {
 		return "", err
 	}
-	return out.HTMLURL, nil
+	var lines []string
+	for _, n := range notes {
+		lines = append(lines, fmt.Sprintf("%s:%d : %s", n.Path, n.StartLine, n.Message))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+// excerpt assemble les parties non vides d'un rapport de check, tronquées à
+// MaxExcerpt caractères.
+func excerpt(parts ...string) string {
+	var kept []string
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			kept = append(kept, p)
+		}
+	}
+	r := []rune(strings.Join(kept, "\n\n"))
+	if len(r) <= MaxExcerpt {
+		return string(r)
+	}
+	return string(r[:MaxExcerpt]) + "…"
 }
 
 func (c *Client) request(ctx context.Context, method, path string, body any) (*http.Request, error) {

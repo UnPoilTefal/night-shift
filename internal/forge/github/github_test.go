@@ -164,15 +164,15 @@ func TestOpenDraftPRAlwaysAsksForADraft(t *testing.T) {
 			t.Errorf("corps = %v", got)
 		}
 		w.WriteHeader(http.StatusCreated)
-		_, _ = io.WriteString(w, `{"html_url": "https://github.com/o/a/pull/12"}`)
+		_, _ = io.WriteString(w, `{"number": 12, "html_url": "https://github.com/o/a/pull/12"}`)
 	})
 
-	url, err := c.OpenDraftPR(context.Background(), "o/a", forge.PullRequest{Head: "agent/7-x", Base: "main", Title: "T", Body: "B"})
+	n, url, err := c.OpenDraftPR(context.Background(), "o/a", forge.PullRequest{Head: "agent/7-x", Base: "main", Title: "T", Body: "B"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if url != "https://github.com/o/a/pull/12" {
-		t.Fatalf("url = %q", url)
+	if n != 12 || url != "https://github.com/o/a/pull/12" {
+		t.Fatalf("PR = %d, %q", n, url)
 	}
 }
 
@@ -198,5 +198,61 @@ func TestCreateIssue(t *testing.T) {
 	}
 	if n != 50 || url != "https://github.com/o/a/issues/50" {
 		t.Fatalf("issue = %d, %q", n, url)
+	}
+}
+
+func TestChecksMergesCheckRunsAndStatusesWithFailureExcerpts(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/a/commits/abc/check-runs":
+			_, _ = io.WriteString(w, `{"check_runs": [
+				{"id": 1, "name": "test", "status": "completed", "conclusion": "failure", "html_url": "https://ci/1",
+				 "output": {"title": "2 tests en échec", "summary": "--- FAIL: TestF", "annotations_count": 1}},
+				{"id": 2, "name": "lint", "status": "completed", "conclusion": "success", "output": {"annotations_count": 3}},
+				{"id": 3, "name": "e2e", "status": "in_progress", "conclusion": null, "output": {}},
+				{"id": 4, "name": "docs", "status": "completed", "conclusion": "skipped", "output": {}},
+				{"id": 5, "name": "build", "status": "completed", "conclusion": "timed_out", "output": {"text": "`+strings.Repeat("x", 5000)+`"}}
+			]}`)
+		case "/repos/o/a/check-runs/1/annotations":
+			_, _ = io.WriteString(w, `[{"path": "f_test.go", "start_line": 12, "annotation_level": "failure", "message": "attendu 2, obtenu 3"}]`)
+		case "/repos/o/a/commits/abc/status":
+			_, _ = io.WriteString(w, `{"statuses": [
+				{"context": "zones", "state": "error", "description": "zone interdite touchée", "target_url": "https://ci/z"},
+				{"context": "cla", "state": "pending"}
+			]}`)
+		default:
+			t.Errorf("requête inattendue : %s", r.URL)
+			http.NotFound(w, r)
+		}
+	})
+
+	cs, err := c.Checks(context.Background(), "o/a", "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]forge.Check{}
+	for _, ch := range cs {
+		got[ch.Name] = ch
+	}
+	want := map[string]forge.CheckState{
+		"test": forge.CheckFailed, "lint": forge.CheckPassed, "e2e": forge.CheckPending, "docs": forge.CheckPassed,
+		"build": forge.CheckFailed, "zones": forge.CheckFailed, "cla": forge.CheckPending,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("checks = %+v", cs)
+	}
+	for name, state := range want {
+		if got[name].State != state {
+			t.Errorf("%s : %s, attendu %s", name, got[name].State, state)
+		}
+	}
+	if e := got["test"].Excerpt; !strings.Contains(e, "2 tests en échec") || !strings.Contains(e, "--- FAIL: TestF") || !strings.Contains(e, "f_test.go:12 : attendu 2, obtenu 3") {
+		t.Errorf("extrait de test = %q", e)
+	}
+	if got["test"].URL != "https://ci/1" || got["zones"].URL != "https://ci/z" || got["zones"].Excerpt != "zone interdite touchée" {
+		t.Errorf("checks = %+v", cs)
+	}
+	if n := len([]rune(got["build"].Excerpt)); n > github.MaxExcerpt+1 {
+		t.Errorf("extrait de build : %d caractères, au plus %d", n, github.MaxExcerpt)
 	}
 }

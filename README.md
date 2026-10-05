@@ -38,7 +38,7 @@ flowchart LR
 
 1. **Selection**: the pass walks the queue (priority, then age, skipping blocked tickets), keeps only content written by trusted authors, and **reserves** the tickets it takes.
 2. **Agent**: a container that receives a filtered brief and a clone of the repository. It holds **no forge token** and can only reach DNS and an egress proxy with a domain allow-list. It returns a series of commits, nothing more.
-3. **Publication**: a step with no model involved. It applies the series, pushes an `agent/…` branch with an attribution trailer and opens a **draft** PR. It never merges and never pushes a tag.
+3. **Publication**: a step with no model involved. It applies the series, pushes an `agent/…` branch with an attribution trailer and opens a **draft** PR. It never merges and never pushes a tag. It then follows the PR's CI: if checks fail, the pass relaunches the agent **once**, in a fresh container on a fresh clone of the published branch, with the names and excerpts of the failing checks. There is never a third round.
 4. **Required checks**: on the forge side, a PR that touches a **forbidden zone** (CI, release pipeline, agent configuration) fails, and a PR that touches a **sensitive zone** (dependencies, for instance) is flagged so that a human decides.
 
 ## Security principles
@@ -68,7 +68,7 @@ A repository is opened to passes only through an **opt-in** (*Adhésion*): a fil
 
 | Tier | What changes | For whom |
 |---|---|---|
-| **Solo** | A Kubernetes `CronJob`: one pod in three steps (selection, agent, publication) | A maintainer and their repositories |
+| **Solo** | A Kubernetes `CronJob`: one pod in steps (selection, agent, publication, then one agent retry if CI fails) | A maintainer and their repositories |
 | **Team** | One service account per team, trust levels per repository | A team that owns its repositories |
 | **Platform** | A self-service **Kubernetes operator**: a team declares a **Shift** (*Poste*) in its namespace | A platform team offering night-shift to others |
 
@@ -76,7 +76,7 @@ A repository's **trust level** (*palier de confiance*: tickets per pass, draft o
 
 ## Roadmap
 
-Status: **a pass runs a real headless `claude -p` agent in three containers, on a brief built from trusted authors only, opens draft PRs and ends with a digest; images are published on each release. CI rounds and outcomes come next.**
+Status: **a pass runs a real headless `claude -p` agent on a brief built from trusted authors only, opens a draft PR, follows its CI with at most two agent rounds, and ends with a digest; images are published on each release. Outcomes and the weekly digest come next.**
 
 **Solo tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/2))
 
@@ -87,7 +87,8 @@ Status: **a pass runs a real headless `claude -p` agent in three containers, on 
 - [x] Trusted-author filtering: a third-party comment after the brief sends the ticket back to triage ([#7](https://github.com/UnPoilTefal/night-shift/issues/7))
 - [x] Container images: a generic base and a Go layer, published on each release ([#11](https://github.com/UnPoilTefal/night-shift/issues/11))
 - [x] Pass digest: a summary comment per ticket, a digest issue per opted-in repository, a short Discord notification ([#8](https://github.com/UnPoilTefal/night-shift/issues/8))
-- [ ] CI rounds, outcomes and weekly digest ([#9](https://github.com/UnPoilTefal/night-shift/issues/9), [#10](https://github.com/UnPoilTefal/night-shift/issues/10))
+- [x] CI rounds: the pass follows the draft PR's CI and relaunches the agent once on failing checks, never a third time ([#9](https://github.com/UnPoilTefal/night-shift/issues/9))
+- [ ] Outcomes and weekly digest ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 
 **Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
 
@@ -96,7 +97,7 @@ Status: **a pass runs a real headless `claude -p` agent in three containers, on 
 
 ## Development
 
-The binary runs a **pass** in three steps, one per container, and provides the **zone check**, which an opted-in repository can run as a required check: see [`docs/opt-in.md`](docs/opt-in.md) for the opt-in schema and the GitHub Action.
+The binary runs a **pass** in steps, one per container, and provides the **zone check**, which an opted-in repository can run as a required check: see [`docs/opt-in.md`](docs/opt-in.md) for the opt-in schema and the GitHub Action.
 
 ```sh
 go build -o night-shift ./cmd/night-shift
@@ -117,14 +118,29 @@ NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift select --repo owner/repo --state /sta
 CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state --work /work --timeout 25m
 
 # 3. Publication (forge token, no model): apply the commit series on agent/<n>-<slug>,
-#    push it, open a draft PR, hand the ticket back in an explicit state, then publish the digest.
+#    push it, open a draft PR and wait for its CI (--ci-timeout, 10m by default).
+#    Green: hand the ticket back in an explicit state, then publish the digest.
+#    Red: prepare the retry in /state2 and /work2 instead (fresh clone of the branch, failing checks).
 #    NIGHT_SHIFT_DISCORD_WEBHOOK is optional.
-NIGHT_SHIFT_GITHUB_TOKEN=… NIGHT_SHIFT_DISCORD_WEBHOOK=… ./night-shift publish --state /state --work /work
+NIGHT_SHIFT_GITHUB_TOKEN=… NIGHT_SHIFT_DISCORD_WEBHOOK=… ./night-shift publish --state /state --work /work \
+  --next-state /state2 --next-work /work2
+
+# 4. Retry (no forge token): the agent adds fixing commits on top of the published branch.
+#    With no retry prepared, it does nothing.
+CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state2 --work /work2 --timeout 25m
+
+# 5. Retry publication: push on the same PR, wait for CI, hand the ticket back and publish the digest.
+#    With no retry prepared, the first publication already did, and it does nothing.
+NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift publish --follow-up --state /state2 --work /work2
 ```
+
+The forge token needs read and write access to contents, pull requests and issues, and read access to checks and commit statuses. It is never mounted in the agent's container, in either round.
 
 | Agent outcome | Ticket ends up |
 |---|---|
-| Commits | Linked to a **draft** PR, commit messages kept, `Night-Shift-Agent` and `Night-Shift-Pass` trailers added; no lifecycle label left |
+| Commits, CI green (first or second round) | Linked to a **draft** PR, commit messages kept, `Night-Shift-Agent` and `Night-Shift-Pass` trailers added; no lifecycle label left |
+| Commits, CI not settled before `--ci-timeout` | Same, with a mention of the checks still running |
+| Commits, CI still red after the second round | `ready-for-human`; the PR stays a draft, with a comment that sums up the failing checks |
 | Brief not enough, unmet precondition, unnamed dependency | `needs-info`, with the agent's reason |
 | Failure, timeout, crash | `ready-for-human`, with a mention of the interruption |
 
@@ -135,7 +151,7 @@ Each ticket gets a summary comment: what was done, cost, duration and its provis
 - **Incidents**: if part of the pass fails (a reservation, a clone), `select` records it instead of exiting, so the pod still reaches publication. The digest counts the incidents without their details, then `publish` exits with an error so that the job shows the failure.
 - **Discord notification** (optional): it holds only counters (tickets, triage, incidents, repositories left out or unreachable) and links to the digest issues; it never names a repository left out, never carries an error message or ticket content, and mentions nobody. The egress proxy must let `publish` reach `discord.com`. Without a webhook, the pass still succeeds and the digest says the notification is not configured. If the webhook fails, the digest issues get a comment saying so.
 
-[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment: a `CronJob` whose pod runs `select` and `agent` as init containers and `publish` as its container, with the forge token and the Discord webhook mounted only in the trusted steps. A test in the repository keeps it that way. The egress proxy and transcript retention belong to your deployment. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
+[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment: a `CronJob` whose pod runs `select`, `agent`, `publish` and `retry-agent` as init containers and `retry-publish` as its container, with the forge token and the Discord webhook mounted only in the trusted steps. Its deadline (90 minutes) covers two agent rounds of 30 minutes and two CI waits of 10 minutes. A test in the repository keeps it that way. The egress proxy and transcript retention belong to your deployment. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
 
 ### Container images
 
@@ -143,8 +159,8 @@ Two images, built from [`images/`](images/) with [`docker-bake.hcl`](docker-bake
 
 | Image | Contents | Used by |
 |---|---|---|
-| `ghcr.io/unpoiltefal/night-shift` | `night-shift`, Claude Code, `gh`, `git`, `make`, and the [mattpocock skills](https://github.com/mattpocock/skills) | `select` and `publish`, and as the base of a repository's tool image |
-| `ghcr.io/unpoiltefal/night-shift-go` | The base image plus the Go toolchain | `agent`, for Go repositories |
+| `ghcr.io/unpoiltefal/night-shift` | `night-shift`, Claude Code, `gh`, `git`, `make`, and the [mattpocock skills](https://github.com/mattpocock/skills) | `select` and both `publish` steps, and as the base of a repository's tool image |
+| `ghcr.io/unpoiltefal/night-shift-go` | The base image plus the Go toolchain | Both `agent` steps, for Go repositories |
 
 - Both run as a non-root user (UID 65532) and carry no secret: tokens and webhooks are provided at run time. They work on a read-only root filesystem once `HOME` points to a writable directory, such as an `emptyDir` on `/tmp`, as the example `CronJob` does.
 - The skills are installed as Claude Code managed skills (`/etc/claude-code/.claude/skills`), so `HOME` and `CLAUDE_CONFIG_DIR` set by the deployment never hide `/implement`.

@@ -20,6 +20,14 @@ type Issue struct {
 	Comments []string
 }
 
+// Pull est l'état d'une PR dans la forge en mémoire, avec les commentaires
+// que la passe y a postés.
+type Pull struct {
+	forge.PullRequest
+	Number   int
+	Comments []string
+}
+
 // Forge est une forge en mémoire, sûre en accès concurrent.
 type Forge struct {
 	// Fail, s'il est renseigné, est appelé avant chaque opération avec son
@@ -30,12 +38,13 @@ type Forge struct {
 	files   map[string]map[string][]byte
 	issues  map[string][]*Issue
 	created map[string][]int
-	pulls   map[string][]forge.PullRequest
+	pulls   map[string][]*Pull
+	checks  map[string][]forge.Check
 }
 
 // New crée une forge vide.
 func New() *Forge {
-	return &Forge{files: map[string]map[string][]byte{}, issues: map[string][]*Issue{}, created: map[string][]int{}, pulls: map[string][]forge.PullRequest{}}
+	return &Forge{files: map[string]map[string][]byte{}, issues: map[string][]*Issue{}, created: map[string][]int{}, pulls: map[string][]*Pull{}, checks: map[string][]forge.Check{}}
 }
 
 // SetFile place un fichier sur la branche par défaut d'un dépôt.
@@ -138,12 +147,15 @@ func (f *Forge) Comment(ctx context.Context, repo string, number int, body strin
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	i := f.find(repo, number)
-	if i == nil {
-		return fmt.Errorf("ticket %s#%d inconnu", repo, number)
+	if i := f.find(repo, number); i != nil {
+		i.Comments = append(i.Comments, body)
+		return nil
 	}
-	i.Comments = append(i.Comments, body)
-	return nil
+	if p := f.findPull(repo, number); p != nil {
+		p.Comments = append(p.Comments, body)
+		return nil
+	}
+	return fmt.Errorf("ticket %s#%d inconnu", repo, number)
 }
 
 // CreateIssue implémente forge.Forge ; l'URL rendue est
@@ -154,10 +166,7 @@ func (f *Forge) CreateIssue(ctx context.Context, repo, title, body string) (int,
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	n := 1
-	for _, i := range f.issues[repo] {
-		n = max(n, i.Number+1)
-	}
+	n := f.next(repo)
 	f.issues[repo] = append(f.issues[repo], &Issue{Ticket: forge.Ticket{Repo: repo, Number: n, Title: title, Body: body}})
 	f.created[repo] = append(f.created[repo], n)
 	return n, fmt.Sprintf("memforge://%s/issues/%d", repo, n), nil
@@ -176,23 +185,59 @@ func (f *Forge) CreatedIssues(repo string) []Issue {
 	return out
 }
 
-// OpenDraftPR implémente forge.Forge ; l'URL rendue est
+// OpenDraftPR implémente forge.Forge ; comme sur GitHub, issues et PR
+// partagent la même numérotation. L'URL rendue est
 // memforge://<dépôt>/pull/<n>.
-func (f *Forge) OpenDraftPR(ctx context.Context, repo string, pr forge.PullRequest) (string, error) {
+func (f *Forge) OpenDraftPR(ctx context.Context, repo string, pr forge.PullRequest) (int, string, error) {
 	if err := f.hook(ctx, "OpenDraftPR"); err != nil {
-		return "", err
+		return 0, "", err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.pulls[repo] = append(f.pulls[repo], pr)
-	return fmt.Sprintf("memforge://%s/pull/%d", repo, len(f.pulls[repo])), nil
+	n := f.next(repo)
+	f.pulls[repo] = append(f.pulls[repo], &Pull{PullRequest: pr, Number: n})
+	return n, fmt.Sprintf("memforge://%s/pull/%d", repo, n), nil
 }
 
 // DraftPRs rend les PR en brouillon ouvertes sur un dépôt.
 func (f *Forge) DraftPRs(repo string) []forge.PullRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Clone(f.pulls[repo])
+	out := make([]forge.PullRequest, 0, len(f.pulls[repo]))
+	for _, p := range f.pulls[repo] {
+		out = append(out, p.PullRequest)
+	}
+	return out
+}
+
+// Pull rend une copie de l'état d'une PR.
+func (f *Forge) Pull(repo string, number int) Pull {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.findPull(repo, number)
+	if p == nil {
+		panic(fmt.Sprintf("memforge : PR %s#%d inconnue", repo, number))
+	}
+	c := *p
+	c.Comments = slices.Clone(p.Comments)
+	return c
+}
+
+// SetChecks fixe les checks de CI rapportés sur un commit.
+func (f *Forge) SetChecks(repo, sha string, checks ...forge.Check) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checks[repo+"@"+sha] = checks
+}
+
+// Checks implémente forge.Forge.
+func (f *Forge) Checks(ctx context.Context, repo, sha string) ([]forge.Check, error) {
+	if err := f.hook(ctx, "Checks"); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.checks[repo+"@"+sha]), nil
 }
 
 // hook simule le comportement d'une vraie forge : un contexte annulé fait
@@ -203,6 +248,27 @@ func (f *Forge) hook(ctx context.Context, op string) error {
 	}
 	if f.Fail != nil {
 		return f.Fail(op)
+	}
+	return nil
+}
+
+// next rend le prochain numéro libre d'un dépôt, issues et PR confondues.
+func (f *Forge) next(repo string) int {
+	n := 1
+	for _, i := range f.issues[repo] {
+		n = max(n, i.Number+1)
+	}
+	for _, p := range f.pulls[repo] {
+		n = max(n, p.Number+1)
+	}
+	return n
+}
+
+func (f *Forge) findPull(repo string, number int) *Pull {
+	for _, p := range f.pulls[repo] {
+		if p.Number == number {
+			return p
+		}
 	}
 	return nil
 }

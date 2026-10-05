@@ -42,8 +42,8 @@ func (h fixedHarness) Run(context.Context, harness.Task) (harness.Result, error)
 
 type fixedPublisher string
 
-func (p fixedPublisher) Publish(context.Context, harness.Task, harness.Result) (string, error) {
-	return string(p), nil
+func (p fixedPublisher) Publish(context.Context, harness.Task, harness.Result) (pass.Published, error) {
+	return pass.Published{Draft: forge.Draft{Number: 12, URL: string(p), Branch: "agent/1"}, Head: "head"}, nil
 }
 
 const secretTitle, secretBody = "Titre confidentiel du ticket", "Corps confidentiel du ticket"
@@ -61,6 +61,7 @@ func runPass(t *testing.T, f *memforge.Forge, n digest.Notifier, h harness.Harne
 	t.Helper()
 	r, err := pass.Run(context.Background(), pass.Config{
 		Repos: repos, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
+		CIPoll: time.Millisecond, CITimeout: 10 * time.Millisecond,
 	}, f, h, fixedPublisher("https://forge/o/a/pull/12"))
 	if err != nil {
 		t.Fatal(err)

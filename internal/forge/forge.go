@@ -1,6 +1,7 @@
 // Package forge définit ce dont une passe a besoin d'une forge (GitHub,
 // GitLab…) : lister les tickets prêts, lire un fichier du dépôt, poser des
-// labels, commenter, ouvrir une issue de digest et une PR en brouillon. Chaque forge fournit son adaptateur.
+// labels, commenter, ouvrir une issue de digest et une PR en brouillon, suivre
+// la CI d'un commit. Chaque forge fournit son adaptateur.
 package forge
 
 import (
@@ -55,6 +56,34 @@ type PullRequest struct {
 	Title, Body string
 }
 
+// Draft désigne une PR en brouillon ouverte par la Publication.
+type Draft struct {
+	Number int
+	URL    string
+	// Branch est la branche agent/ de la PR.
+	Branch string
+}
+
+// CheckState est l'état d'un check de CI.
+type CheckState string
+
+// États d'un check.
+const (
+	CheckPending CheckState = "pending"
+	CheckPassed  CheckState = "passed"
+	CheckFailed  CheckState = "failed"
+)
+
+// Check est un check de CI rapporté sur un commit.
+type Check struct {
+	Name  string
+	State CheckState
+	// Excerpt est un extrait tronqué de ce que le check rapporte (titre,
+	// résumé, annotations) ; URL renvoie vers son détail.
+	Excerpt string
+	URL     string
+}
+
 // Forge est le contrat qu'une passe attend d'une forge.
 type Forge interface {
 	// ReadyTickets liste les tickets ouverts portant LabelReady, avec leurs
@@ -71,7 +100,11 @@ type Forge interface {
 	Comment(ctx context.Context, repo string, number int, body string) error
 	// CreateIssue ouvre une issue et rend son numéro et son URL.
 	CreateIssue(ctx context.Context, repo, title, body string) (number int, url string, err error)
-	// OpenDraftPR ouvre une PR en brouillon et rend son URL. Aucune méthode ne
-	// permet de la passer en prête, de la merger ni de l'approuver.
-	OpenDraftPR(ctx context.Context, repo string, pr PullRequest) (url string, err error)
+	// OpenDraftPR ouvre une PR en brouillon et rend son numéro et son URL.
+	// Aucune méthode ne permet de la passer en prête, de la merger ni de
+	// l'approuver. Comment commente une PR par son numéro.
+	OpenDraftPR(ctx context.Context, repo string, pr PullRequest) (number int, url string, err error)
+	// Checks rend les checks de CI rapportés sur un commit, quel que soit
+	// leur état ; aucun check n'est encore rapporté juste après un push.
+	Checks(ctx context.Context, repo, sha string) ([]Check, error)
 }
