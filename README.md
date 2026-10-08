@@ -10,7 +10,7 @@
 [![Renovate](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot)](https://github.com/UnPoilTefal/night-shift/issues/1)
 [![Status](https://img.shields.io/badge/status-in%20development-yellow)](#roadmap)
 [![Decisions](https://img.shields.io/badge/decisions-ADR-blue)](docs/adr/)
-[![Glossary](https://img.shields.io/badge/glossary-CONTEXT.md-blue)](CONTEXT.md)
+[![Glossary](https://img.shields.io/badge/glossary-GLOSSARY.md-blue)](GLOSSARY.md)
 
 night-shift runs scheduled **passes** of AI coding agents over the **ready tickets** in an issue tracker: issues labelled `ready-for-agent` and carrying a self-contained agent brief. Each pass reserves a capped number of tickets and hands each one to a headless agent, locked in a container that has no privileges. It produces exactly two things: **draft PRs** and a **digest** for human review.
 
@@ -216,7 +216,7 @@ Every pull request runs lint, tests, the image build with its smoke test and sec
 Design documents are written in French, using the glossary's French aliases.
 
 - [`docs/opt-in.md`](docs/opt-in.md): the opt-in schema and how to wire the zone check into a repository's CI.
-- [`CONTEXT.md`](CONTEXT.md): the glossary. Every term in **bold** in this README is defined there under its canonical English name, with its French alias (shown here in *italics*) used throughout the French design documents.
+- [`GLOSSARY.md`](GLOSSARY.md): the glossary. Every term in **bold** in this README is defined there under its canonical English name, with its French alias (shown here in *italics*) used throughout the French design documents.
 - [`docs/adr/`](docs/adr/): architecture decisions, including the alternatives that were rejected.
 - [`docs/agents/`](docs/agents/): configuration for the agents working on this repository.
 

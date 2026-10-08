@@ -10,4 +10,4 @@ Chaque terme du glossaire a un nom canonique anglais (`Pass`, `Shift`, `Opt-in`â
 
 ## Consequences
 
-Le glossaire `CONTEXT.md` fait foi pour la correspondance entre les deux langues. Un identifiant de code ou un kind de CRD prend toujours le nom canonique anglais.
+Le glossaire `GLOSSARY.md` fait foi pour la correspondance entre les deux langues. Un identifiant de code ou un kind de CRD prend toujours le nom canonique anglais.
