@@ -12,3 +12,5 @@ Concrètement :
 ## Consequences
 
 Un repo incapable d'imposer des checks requis ne peut pas adhérer. L'accès à une zone réseau interne n'est accordé que par profil de sortie explicite, quand un ticket réel l'exige.
+
+Statut : remplacé en partie par l'ADR 0011 (la Publication fait respecter les zones).

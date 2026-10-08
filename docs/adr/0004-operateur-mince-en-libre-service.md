@@ -15,3 +15,5 @@ Pour le palier plateforme, une équipe déclare un **Poste** dans son namespace,
 - **Toute la logique métier vit dans le binaire `night-shift`**, partagé avec le palier solo. Elle est validée d'abord en `CronJob`, et l'opérateur n'ajoute que la traduction Kubernetes.
 - **Déclencheur et Mission sont des unions** (un seul membre renseigné). La v1 ne connaît que le déclenchement par cron, plus la création manuelle d'une Passe, et la seule Mission « tickets ». Le déclenchement par événement et la Mission « incident » pourront venir sans casser l'API, mais le premier remplacera l'ADR 0001 et la seconde demandera son propre ADR de sécurité.
 - **Point ouvert** : qui fournit le proxy de sortie, la plateforme ou chaque namespace.
+
+Statut : amendé par l'ADR 0010 (proxy mutualisé, tenant unique).
