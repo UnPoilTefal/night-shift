@@ -90,6 +90,12 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] CI rounds: the pass follows the draft PR's CI and relaunches the agent once on failing checks, never a third time ([#9](https://github.com/UnPoilTefal/night-shift/issues/9))
 - [ ] Outcomes and weekly digest ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 
+**GitLab pilot** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57))
+
+- [ ] Ticket source and code forge as two separate contracts, with one contract test suite for every adapter
+- [ ] Publication enforces the zones before pushing, so the opt-in file becomes the only thing a target repository needs ([ADR 0011](docs/adr/0011-publication-frontiere-des-zones.md))
+- [ ] GitLab adapter: issues as a ticket source, draft merge requests, pipelines for CI rounds, self-managed instances
+
 **Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
 
 - [x] Increment 0: `Shift` and `Pass` custom resources, a scheduled pass per cron occurrence, one active pass per shift, a hardened orchestrator Job ([#13](https://github.com/UnPoilTefal/night-shift/issues/13))
