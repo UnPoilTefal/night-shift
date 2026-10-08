@@ -2,6 +2,8 @@
 
 Vocabulaire de night-shift : des passes planifiées d'agents IA qui traitent les tickets prêts d'un issue tracker. Ce fichier est un glossaire : les décisions vivent dans `docs/adr/`.
 
+Ce fichier s'appelait `CONTEXT.md` jusqu'au 2026-10-08 : les issues plus anciennes le citent sous ce nom.
+
 Chaque terme a un **nom canonique anglais**, employé dans le code, les ressources Kubernetes et la documentation anglaise, et un **alias français** (`_FR_`), employé dans la prose française (ADR, specs, tickets). Les deux désignent la même chose. Voir l'ADR 0006.
 
 ## Language

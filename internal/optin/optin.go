@@ -1,6 +1,6 @@
 // Package optin lit et valide l'adhésion d'un dépôt cible : le fichier
 // versionné par lequel l'équipe propriétaire rend le dépôt éligible aux passes
-// et en fixe le périmètre (voir CONTEXT.md, terme Opt-in).
+// et en fixe le périmètre (voir GLOSSARY.md, terme Opt-in).
 package optin
 
 import (
