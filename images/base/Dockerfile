@@ -43,7 +43,7 @@ RUN echo "$(grep " gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz$" /tmp/checksums.
 
 FROM node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_CODE_VERSION=2.1.289
+ARG CLAUDE_CODE_VERSION=2.1.292
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates git make \
 	&& rm -rf /var/lib/apt/lists/*
