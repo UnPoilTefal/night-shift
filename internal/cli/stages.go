@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/forge/github"
 	"github.com/UnPoilTefal/night-shift/internal/gitrepo"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
@@ -19,9 +20,6 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/publication"
 	"github.com/UnPoilTefal/night-shift/internal/stage"
 )
-
-// DefaultGitURL est la base des adresses de clone de github.com.
-const DefaultGitURL = "https://github.com"
 
 func stageFlags(fs *flag.FlagSet) *stage.Dirs {
 	d := &stage.Dirs{}
@@ -43,7 +41,7 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 	var repos repoList
 	fs.Var(&repos, "repo", "dépôt candidat propriétaire/nom (répétable, ou liste séparée par des virgules)")
 	apiURL := fs.String("api-url", github.DefaultBaseURL, "URL de l'API REST GitHub")
-	gitURL := fs.String("git-url", DefaultGitURL, "base des adresses de clone")
+	gitURL := fs.String("git-url", github.DefaultGitURL, "base des adresses de clone")
 	d := stageFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -61,20 +59,20 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	now := time.Now
 	cfg := pass.Config{Repos: repos, MaxTickets: 1, ID: "pass-" + now().UTC().Format("20060102T150405Z"), Now: now}
-	f := github.New(*apiURL, token)
-	report, tasks, err := pass.Select(ctx, cfg, f)
+	f := github.New(*apiURL, *gitURL, token)
+	report, tasks, err := pass.Select(ctx, cfg, f, f)
 	if err != nil {
 		report.Errors = append(report.Errors, err.Error())
 	}
 	reserved := false
 	for _, task := range tasks {
-		perr := prepare(ctx, *d, gitrepo.Remote{BaseURL: *gitURL, Token: token}, &task)
+		perr := prepare(ctx, *d, f, token, &task)
 		if perr == nil {
 			reserved = true
 			continue
 		}
 		report.Errors = append(report.Errors, "préparation du clone : "+perr.Error())
-		tr, serr := pass.Settle(ctx, cfg, f, task, harness.Result{Outcome: harness.Failed, Reason: "préparation du clone : " + perr.Error()})
+		tr, serr := pass.Settle(ctx, cfg, f, f, task, harness.Result{Outcome: harness.Failed, Reason: "préparation du clone : " + perr.Error()})
 		if serr != nil {
 			report.Errors = append(report.Errors, serr.Error())
 			continue
@@ -102,12 +100,17 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func prepare(ctx context.Context, d stage.Dirs, remote gitrepo.Remote, task *harness.Task) error {
-	branch, sha, err := remote.Clone(ctx, task.Ticket.Repo, d.RepoDir())
+// prepare clone le dépôt cible de la tâche par l'accès git de sa forge de
+// code, puis écrit la tâche, complétée du commit de base et de l'identité de
+// l'agent.
+func prepare(ctx context.Context, d stage.Dirs, code forge.CodeForge, token string, task *harness.Task) error {
+	access := code.GitAccess(task.TargetRepo)
+	branch, sha, err := gitrepo.Remote{GitAccess: access, Token: token}.Clone(ctx, d.RepoDir())
 	if err != nil {
 		return err
 	}
 	task.BaseBranch, task.BaseSHA, task.OptInSHA = branch, sha, sha
+	task.AgentIdentity = access.Agent
 	if err := os.MkdirAll(d.OutDir(), 0o755); err != nil { // #nosec G301 -- écrit par l'agent, lu par la Publication
 		return err
 	}
@@ -199,7 +202,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	ciPoll := fs.Duration("ci-poll", pass.DefaultCIPoll, "intervalle entre deux lectures de la CI")
 	ciSettle := fs.Duration("ci-settle", pass.DefaultCISettle, "durée pendant laquelle tous les checks doivent rester terminés avant le verdict")
 	apiURL := fs.String("api-url", github.DefaultBaseURL, "URL de l'API REST GitHub")
-	gitURL := fs.String("git-url", DefaultGitURL, "base des adresses de clone")
+	gitURL := fs.String("git-url", github.DefaultGitURL, "base des adresses de clone")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -218,7 +221,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signalContext()
 	defer stop()
-	f := github.New(*apiURL, token)
+	f := github.New(*apiURL, *gitURL, token)
 	if !ok && *followUp {
 		_, _ = fmt.Fprintln(stdout, "aucune relance : le tour précédent a rendu le ticket")
 		return 0
@@ -240,8 +243,8 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	if next.State != "" {
 		cfg.Rounds = pass.MaxRounds
 	}
-	remote := gitrepo.Remote{BaseURL: *gitURL, Token: token}
-	fu := pass.Follow(ctx, cfg, f, publication.Git{Forge: f, GitURL: *gitURL, Token: token}, task, res)
+	remote := gitrepo.Remote{GitAccess: f.GitAccess(task.TargetRepo), Token: token}
+	fu := pass.Follow(ctx, cfg, f, publication.Git{Code: f, Token: token}, task, res)
 	if fu.Retry {
 		perr := prepareRetry(ctx, *d, next, remote, fu.Next)
 		if perr == nil {
@@ -255,7 +258,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 		fu.Result.Reason = "La relance de l'agent n'a pas pu être préparée.\n\n" + fu.Result.Reason
 	}
 
-	tr, err := pass.Settle(ctx, cfg, f, fu.Task, fu.Result)
+	tr, err := pass.Settle(ctx, cfg, f, f, fu.Task, fu.Result)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "publish : %v\n", err)
 		if tr.Repo == "" {
@@ -274,10 +277,10 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 // suivant et le rapport de la sélection, que la dernière Publication
 // complétera pour le digest.
 func prepareRetry(ctx context.Context, d, next stage.Dirs, remote gitrepo.Remote, task harness.Task) error {
-	if _, _, err := remote.Clone(ctx, task.Ticket.Repo, next.RepoDir()); err != nil {
+	if _, _, err := remote.Clone(ctx, next.RepoDir()); err != nil {
 		return err
 	}
-	if _, err := remote.Git(ctx, next.RepoDir(), "checkout", "--quiet", "-b", task.PullRequest.Branch, task.BaseSHA); err != nil {
+	if _, err := remote.Git(ctx, next.RepoDir(), "checkout", "--quiet", "-b", task.ChangeRequest.Branch, task.BaseSHA); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(next.OutDir(), 0o755); err != nil { // #nosec G301 -- écrit par l'agent, lu par la Publication

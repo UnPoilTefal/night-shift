@@ -50,6 +50,7 @@ func fixture(t *testing.T) (*testgit.Remote, harness.Task, [][]byte) {
 
 	task := harness.Task{
 		Ticket:     forge.Ticket{Repo: "o/a", Number: 7, Title: "Ajouter la fonction F !"},
+		TargetRepo: "o/a",
 		PassID:     "pass-42",
 		BaseBranch: "main",
 		BaseSHA:    base,
@@ -58,10 +59,17 @@ func fixture(t *testing.T) (*testgit.Remote, harness.Task, [][]byte) {
 	return remote, task, patches
 }
 
+// gitForge rend la forge en mémoire f, dont les dépôts se clonent depuis le
+// dossier de remote.
+func gitForge(f *memforge.Forge, remote *testgit.Remote) *memforge.Forge {
+	f.GitURL = remote.Base
+	return f
+}
+
 func TestPublishPushesAgentBranchAndOpensDraft(t *testing.T) {
 	remote, task, patches := fixture(t)
 	f := memforge.New()
-	p := publication.Git{Forge: f, GitURL: remote.Base, Token: "ghp_secret"}
+	p := publication.Git{Code: gitForge(f, remote), Token: "ghp_secret"}
 	mainBefore := remote.Out("rev-parse", "main")
 
 	pub, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: patches})
@@ -88,7 +96,7 @@ func TestPublishPushesAgentBranchAndOpensDraft(t *testing.T) {
 	if tags := remote.Out("tag"); tags != "" {
 		t.Fatalf("tags poussés : %q", tags)
 	}
-	prs := f.DraftPRs("o/a")
+	prs := f.ChangeRequests("o/a")
 	if len(prs) != 1 || pub.Draft.URL == "" || pub.Draft.Number == 0 || pub.Draft.Branch != branch {
 		t.Fatalf("PR ouvertes = %+v, publiée = %+v", prs, pub)
 	}
@@ -103,7 +111,7 @@ func TestPublishPushesAgentBranchAndOpensDraft(t *testing.T) {
 func TestPublishRefusesASeriesThatDoesNotApply(t *testing.T) {
 	remote, task, _ := fixture(t)
 	f := memforge.New()
-	p := publication.Git{Forge: f, GitURL: remote.Base}
+	p := publication.Git{Code: gitForge(f, remote)}
 	bogus := []byte("From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\nFrom: agent <agent@example.com>\nSubject: [PATCH] x\n\n---\n README.md | 1 +\n\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n absent\n+ligne\n")
 
 	_, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Patches: [][]byte{bogus}})
@@ -114,7 +122,7 @@ func TestPublishRefusesASeriesThatDoesNotApply(t *testing.T) {
 	if branches := remote.Out("branch", "--list", "agent/*"); branches != "" {
 		t.Fatalf("branche poussée malgré l'échec : %q", branches)
 	}
-	if len(f.DraftPRs("o/a")) != 0 {
+	if len(f.ChangeRequests("o/a")) != 0 {
 		t.Fatal("PR ouverte malgré l'échec")
 	}
 }
@@ -137,7 +145,7 @@ func TestShellMetacharactersInTitleHaveNoEffect(t *testing.T) {
 	sentinel := t.TempDir()
 	task.Ticket.Title = fmt.Sprintf("$(touch %[1]s/a) `touch %[1]s/b` ; touch %[1]s/c | touch %[1]s/d && touch %[1]s/e", sentinel)
 	f := memforge.New()
-	p := publication.Git{Forge: f, GitURL: remote.Base}
+	p := publication.Git{Code: gitForge(f, remote)}
 
 	if _, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: patches}); err != nil {
 		t.Fatal(err)
@@ -146,7 +154,7 @@ func TestShellMetacharactersInTitleHaveNoEffect(t *testing.T) {
 	if entries, _ := os.ReadDir(sentinel); len(entries) != 0 {
 		t.Fatalf("le titre a été interprété par un shell : %v", entries)
 	}
-	pr := f.DraftPRs("o/a")[0]
+	pr := f.ChangeRequests("o/a")[0]
 	if pr.Title != task.Ticket.Title || !regexp.MustCompile(`^agent/7-[a-z0-9-]+$`).MatchString(pr.Head) {
 		t.Fatalf("PR = %+v, attendu le titre tel quel et une branche réduite à [a-z0-9-]", pr)
 	}
@@ -156,13 +164,13 @@ func TestUntitledTaskStillOpensATitledDraft(t *testing.T) {
 	remote, task, patches := fixture(t)
 	task.Ticket.Title = ""
 	f := memforge.New()
-	p := publication.Git{Forge: f, GitURL: remote.Base}
+	p := publication.Git{Code: gitForge(f, remote)}
 
 	if _, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: patches}); err != nil {
 		t.Fatal(err)
 	}
 
-	if pr := f.DraftPRs("o/a")[0]; !strings.Contains(pr.Title, "#7") || pr.Head != "agent/7" {
+	if pr := f.ChangeRequests("o/a")[0]; !strings.Contains(pr.Title, "#7") || pr.Head != "agent/7" {
 		t.Fatalf("PR = %+v, attendu un titre qui nomme le ticket", pr)
 	}
 }
@@ -190,21 +198,21 @@ func commitOn(t *testing.T, remote *testgit.Remote, sha, name string) [][]byte {
 func TestRetryRoundPushesOnTheSameBranchWithoutANewDraft(t *testing.T) {
 	remote, task, patches := fixture(t)
 	f := memforge.New()
-	p := publication.Git{Forge: f, GitURL: remote.Base}
+	p := publication.Git{Code: gitForge(f, remote)}
 	first, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: patches})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	retry := task
-	retry.Round, retry.BaseSHA, retry.PullRequest = 2, first.Head, &first.Draft
+	retry.Round, retry.BaseSHA, retry.ChangeRequest = 2, first.Head, &first.Draft
 	second, err := p.Publish(context.Background(), retry, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: commitOn(t, remote, first.Head, "h.go")})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(f.DraftPRs("o/a")) != 1 || second.Draft != first.Draft {
-		t.Fatalf("PR = %+v puis %+v, %d ouvertes ; attendu la même PR", first.Draft, second.Draft, len(f.DraftPRs("o/a")))
+	if len(f.ChangeRequests("o/a")) != 1 || second.Draft != first.Draft {
+		t.Fatalf("PR = %+v puis %+v, %d ouvertes ; attendu la même PR", first.Draft, second.Draft, len(f.ChangeRequests("o/a")))
 	}
 	if got := remote.Out("rev-parse", first.Draft.Branch); got != second.Head || remote.Out("rev-parse", second.Head+"~1") != first.Head {
 		t.Fatalf("tête de %s = %s, attendu le commit de relance %s par-dessus %s", first.Draft.Branch, got, second.Head, first.Head)
@@ -216,8 +224,8 @@ func TestRetryRoundPushesOnTheSameBranchWithoutANewDraft(t *testing.T) {
 
 func TestRetryRoundRefusesABranchOutsideAgentPrefix(t *testing.T) {
 	remote, task, patches := fixture(t)
-	p := publication.Git{Forge: memforge.New(), GitURL: remote.Base}
-	task.Round, task.PullRequest = 2, &forge.Draft{Number: 3, URL: "u", Branch: "main"}
+	p := publication.Git{Code: gitForge(memforge.New(), remote)}
+	task.Round, task.ChangeRequest = 2, &forge.Draft{Number: 3, URL: "u", Branch: "main"}
 
 	if _, err := p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Patches: patches}); err == nil {
 		t.Fatal("erreur attendue : la Publication ne pousse que sur agent/")

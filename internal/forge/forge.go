@@ -1,7 +1,8 @@
-// Package forge définit ce dont une passe a besoin d'une forge (GitHub,
-// GitLab…) : lister les tickets prêts, lire un fichier du dépôt, poser des
-// labels, commenter, ouvrir une issue de digest et une PR en brouillon, suivre
-// la CI d'un commit. Chaque forge fournit son adaptateur.
+// Package forge définit les deux contrats qu'une passe attend de ses outils
+// (ADR 0012) : la source de tickets (tickets prêts, labels, commentaires,
+// issue de digest) et la forge de code (fichiers du dépôt cible, accès git,
+// demande de changement en brouillon, checks de CI). Chaque outil fournit
+// son adaptateur ; la suite de contrat forgetest les juge tous.
 package forge
 
 import (
@@ -19,7 +20,7 @@ const (
 	LabelTriage     = "needs-triage"
 )
 
-// LabelSensitiveZone signale une PR d'agent qui touche une zone sensible :
+// LabelSensitiveZone signale une demande de changement d'agent qui touche une zone sensible :
 // un humain décide (ADR 0011).
 const LabelSensitiveZone = "sensitive-zone"
 
@@ -54,19 +55,40 @@ type Comment struct {
 	UpdatedAt time.Time
 }
 
-// PullRequest décrit une PR à ouvrir, toujours en brouillon.
-type PullRequest struct {
+// ChangeRequest décrit une demande de changement à ouvrir, toujours en
+// brouillon.
+type ChangeRequest struct {
 	// Head est la branche poussée, Base la branche visée.
 	Head, Base  string
 	Title, Body string
+	// Labels sont posés sur la demande dès son ouverture.
+	Labels []string
 }
 
-// Draft désigne une PR en brouillon ouverte par la Publication.
+// Draft désigne une demande de changement en brouillon ouverte par la
+// Publication.
 type Draft struct {
 	Number int
 	URL    string
-	// Branch est la branche agent/ de la PR.
+	// Branch est la branche agent/ de la demande.
 	Branch string
+}
+
+// Identity signe des commits.
+type Identity struct {
+	Name, Email string
+}
+
+// GitAccess est ce dont le transport git a besoin pour cloner un dépôt cible
+// et y pousser.
+type GitAccess struct {
+	// URL est l'adresse de clone du dépôt.
+	URL string
+	// User est l'utilisateur que la forge attend avec le jeton.
+	User string
+	// Identity signe les commits que night-shift crée lui-même ; Agent, ceux
+	// de l'agent.
+	Identity, Agent Identity
 }
 
 // CheckState est l'état d'un check de CI.
@@ -103,27 +125,41 @@ func (c Check) Quote(indent string) string {
 	return strings.Join(lines, "\n")
 }
 
-// Forge est le contrat qu'une passe attend d'une forge.
-type Forge interface {
+// TicketSource est le contrat qu'une passe attend d'une source de tickets.
+type TicketSource interface {
 	// ReadyTickets liste les tickets ouverts portant LabelReady, avec leurs
-	// commentaires.
+	// commentaires ; une demande de changement n'est jamais un ticket.
 	ReadyTickets(ctx context.Context, repo string) ([]Ticket, error)
-	// File lit un fichier sur la branche par défaut ; ok vaut false s'il
-	// n'existe pas.
-	File(ctx context.Context, repo, path string) (data []byte, ok bool, err error)
-	// AddLabel pose un label sur un ticket ou une PR, et crée le label sur
-	// le dépôt s'il n'existe pas.
+	// AddLabel pose un label sur un ticket, et crée le label s'il n'existe
+	// pas ; le poser deux fois ne le double pas.
 	AddLabel(ctx context.Context, repo string, number int, label string) error
-	// RemoveLabel retire un label ; l'absence du label n'est pas une erreur.
+	// RemoveLabel retire un label d'un ticket ; l'absence du label n'est pas
+	// une erreur.
 	RemoveLabel(ctx context.Context, repo string, number int, label string) error
 	// Comment ajoute un commentaire à un ticket.
 	Comment(ctx context.Context, repo string, number int, body string) error
 	// CreateIssue ouvre une issue et rend son numéro et son URL.
 	CreateIssue(ctx context.Context, repo, title, body string) (number int, url string, err error)
-	// OpenDraftPR ouvre une PR en brouillon et rend son numéro et son URL.
-	// Aucune méthode ne permet de la passer en prête, de la merger ni de
-	// l'approuver. Comment commente une PR par son numéro.
-	OpenDraftPR(ctx context.Context, repo string, pr PullRequest) (number int, url string, err error)
+}
+
+// CodeForge est le contrat qu'une passe attend de la forge de code qui
+// héberge le dépôt cible. Aucune méthode ne permet de passer une demande de
+// changement en prête, de la merger ni de l'approuver.
+type CodeForge interface {
+	// File lit un fichier sur la branche par défaut ; ok vaut false s'il
+	// n'existe pas.
+	File(ctx context.Context, repo, path string) (data []byte, ok bool, err error)
+	// GitAccess rend de quoi cloner le dépôt et y pousser.
+	GitAccess(repo string) GitAccess
+	// OpenChangeRequest ouvre une demande de changement en brouillon, avec
+	// ses labels, et rend son numéro et son URL. Si la pose d'un label
+	// échoue, la demande ouverte est rendue avec l'erreur.
+	OpenChangeRequest(ctx context.Context, repo string, cr ChangeRequest) (number int, url string, err error)
+	// CommentChangeRequest ajoute un commentaire à une demande de changement.
+	CommentChangeRequest(ctx context.Context, repo string, number int, body string) error
+	// AddChangeRequestLabel pose un label sur une demande de changement déjà
+	// ouverte, comme TicketSource.AddLabel sur un ticket.
+	AddChangeRequestLabel(ctx context.Context, repo string, number int, label string) error
 	// Checks rend les checks de CI rapportés sur un commit, quel que soit
 	// leur état ; aucun check n'est encore rapporté juste après un push.
 	Checks(ctx context.Context, repo, sha string) ([]Check, error)

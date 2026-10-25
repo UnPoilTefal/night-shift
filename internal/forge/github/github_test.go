@@ -24,7 +24,7 @@ func server(t *testing.T, h http.HandlerFunc) *github.Client {
 		h(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	return github.New(srv.URL, token)
+	return github.New(srv.URL, "https://git.example", token)
 }
 
 func TestReadyTicketsSkipsPullRequestsAndReadsBlockersAndComments(t *testing.T) {
@@ -151,7 +151,7 @@ func TestErrorsNeverContainTheToken(t *testing.T) {
 	}
 }
 
-func TestOpenDraftPRAlwaysAsksForADraft(t *testing.T) {
+func TestOpenChangeRequestAlwaysAsksForADraft(t *testing.T) {
 	c := server(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/repos/o/a/pulls" {
 			t.Errorf("requête inattendue : %s %s", r.Method, r.URL)
@@ -167,7 +167,7 @@ func TestOpenDraftPRAlwaysAsksForADraft(t *testing.T) {
 		_, _ = io.WriteString(w, `{"number": 12, "html_url": "https://github.com/o/a/pull/12"}`)
 	})
 
-	n, url, err := c.OpenDraftPR(context.Background(), "o/a", forge.PullRequest{Head: "agent/7-x", Base: "main", Title: "T", Body: "B"})
+	n, url, err := c.OpenChangeRequest(context.Background(), "o/a", forge.ChangeRequest{Head: "agent/7-x", Base: "main", Title: "T", Body: "B"})
 	if err != nil {
 		t.Fatal(err)
 	}

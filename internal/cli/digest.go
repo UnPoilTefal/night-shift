@@ -21,7 +21,7 @@ const WebhookEnv = "NIGHT_SHIFT_DISCORD_WEBHOOK"
 // digestCode publie le digest de la passe et rend le code de sortie : 1 si
 // une issue de digest n'a pas pu être ouverte. Une notification absente ou
 // en échec ne fait pas échouer la passe ; le digest le signale.
-func digestCode(ctx context.Context, f forge.Forge, r pass.Report, stdout, stderr io.Writer, cmd string) int {
+func digestCode(ctx context.Context, f forge.TicketSource, r pass.Report, stdout, stderr io.Writer, cmd string) int {
 	var n digest.Notifier
 	if u := os.Getenv(WebhookEnv); u != "" {
 		n = discord.New(u)
@@ -47,7 +47,7 @@ func digestCode(ctx context.Context, f forge.Forge, r pass.Report, stdout, stder
 // la Publication, s'il y en a un, et publie le digest. Un rapport absent ou
 // illisible n'empêche pas le rendu du ticket, déjà fait : il prive seulement
 // la passe de digest. Code de sortie : 1 si la passe a connu un incident.
-func publishDigest(ctx context.Context, f forge.Forge, d *stage.Dirs, tr *pass.TicketReport, stdout, stderr io.Writer) int {
+func publishDigest(ctx context.Context, f forge.TicketSource, d *stage.Dirs, tr *pass.TicketReport, stdout, stderr io.Writer) int {
 	report, ok, err := d.ReadReport()
 	switch {
 	case err != nil:

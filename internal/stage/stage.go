@@ -62,6 +62,8 @@ func (d Dirs) WriteTask(t harness.Task) error {
 }
 
 // ReadTask relit la tâche ; ok vaut false si la sélection n'a rien réservé.
+// Une tâche écrite sans dépôt cible, par une version précédente, vise le
+// dépôt de son ticket.
 func (d Dirs) ReadTask() (harness.Task, bool, error) {
 	var t harness.Task
 	b, err := os.ReadFile(d.taskFile())
@@ -73,6 +75,9 @@ func (d Dirs) ReadTask() (harness.Task, bool, error) {
 	}
 	if err := json.Unmarshal(b, &t); err != nil {
 		return t, false, fmt.Errorf("tâche illisible : %w", err)
+	}
+	if t.TargetRepo == "" {
+		t.TargetRepo = t.Ticket.Repo
 	}
 	return t, true, nil
 }

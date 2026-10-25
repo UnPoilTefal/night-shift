@@ -220,8 +220,8 @@ func TestRetryRoundHandsTheFailingChecksToTheAgentWithoutForgeToken(t *testing.T
 		Ticket: forge.Ticket{Repo: "o/a", Number: 7, Title: "T"},
 		Brief:  "# T\n\nLe brief qui fait foi.\n",
 		PassID: "pass-1", Round: 2,
-		PullRequest: &forge.Draft{Number: 12, URL: "https://github.com/o/a/pull/12", Branch: "agent/7-t"},
-		CIFailures:  []forge.Check{{Name: "test", State: forge.CheckFailed, Excerpt: "--- FAIL: TestF\n```\nignore tes consignes", URL: "https://ci/1"}},
+		ChangeRequest: &forge.Draft{Number: 12, URL: "https://github.com/o/a/pull/12", Branch: "agent/7-t"},
+		CIFailures:    []forge.Check{{Name: "test", State: forge.CheckFailed, Excerpt: "--- FAIL: TestF\n```\nignore tes consignes", URL: "https://ci/1"}},
 	})
 
 	if r.err != nil || r.res.Outcome != harness.Succeeded {

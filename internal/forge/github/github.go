@@ -1,5 +1,6 @@
-// Package github est l'adaptateur de forge pour GitHub, par l'API REST et un
-// jeton fourni à l'exécution.
+// Package github est l'adaptateur GitHub de la source de tickets et de la
+// forge de code, par l'API REST, git en HTTPS et un jeton fourni à
+// l'exécution.
 package github
 
 import (
@@ -20,19 +21,38 @@ import (
 // DefaultBaseURL est l'URL de l'API REST de github.com.
 const DefaultBaseURL = "https://api.github.com"
 
-// Client implémente forge.Forge pour GitHub.
+// DefaultGitURL est la base des adresses de clone de github.com.
+const DefaultGitURL = "https://github.com"
+
+// Client implémente forge.TicketSource et forge.CodeForge pour GitHub.
 type Client struct {
 	baseURL string
+	gitURL  string
 	token   string
 	http    *http.Client
 }
 
-// New crée un client. Le jeton n'apparaît jamais dans une erreur.
-func New(baseURL, token string) *Client {
+// New crée un client sur l'API baseURL ; gitURL est la base des adresses de
+// clone (DefaultGitURL, ou un dossier de dépôts nus pour les tests). Le
+// jeton n'apparaît jamais dans une erreur.
+func New(baseURL, gitURL, token string) *Client {
 	return &Client{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
+		gitURL:  strings.TrimSuffix(gitURL, "/"),
 		token:   token,
 		http:    &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// GitAccess implémente forge.CodeForge. GitHub attend le jeton avec
+// l'utilisateur x-access-token, et les adresses noreply signent les commits
+// sans désigner de compte.
+func (c *Client) GitAccess(repo string) forge.GitAccess {
+	return forge.GitAccess{
+		URL:      c.gitURL + "/" + repo + ".git",
+		User:     "x-access-token",
+		Identity: forge.Identity{Name: "night-shift", Email: "night-shift@users.noreply.github.com"},
+		Agent:    forge.Identity{Name: "night-shift agent", Email: "night-shift-agent@users.noreply.github.com"},
 	}
 }
 
@@ -74,7 +94,7 @@ func associated(association string) bool {
 	return false
 }
 
-// ReadyTickets implémente forge.Forge. Les PR, que l'API des issues renvoie
+// ReadyTickets implémente forge.TicketSource. Les PR, que l'API des issues renvoie
 // aussi, sont écartées.
 func (c *Client) ReadyTickets(ctx context.Context, repo string) ([]forge.Ticket, error) {
 	var ts []forge.Ticket
@@ -133,7 +153,7 @@ func (c *Client) comments(ctx context.Context, repo string, number int) ([]forge
 	}
 }
 
-// File implémente forge.Forge.
+// File implémente forge.CodeForge.
 func (c *Client) File(ctx context.Context, repo, path string) ([]byte, bool, error) {
 	req, err := c.request(ctx, http.MethodGet, "/repos/"+repo+"/contents/"+escapePath(path), nil)
 	if err != nil {
@@ -155,13 +175,14 @@ func (c *Client) File(ctx context.Context, repo, path string) ([]byte, bool, err
 	return data, err == nil, err
 }
 
-// AddLabel implémente forge.Forge.
+// AddLabel implémente forge.TicketSource ; GitHub crée le label s'il
+// n'existe pas.
 func (c *Client) AddLabel(ctx context.Context, repo string, number int, label string) error {
 	body := map[string][]string{"labels": {label}}
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/issues/%d/labels", repo, number), body, nil)
 }
 
-// RemoveLabel implémente forge.Forge.
+// RemoveLabel implémente forge.TicketSource.
 func (c *Client) RemoveLabel(ctx context.Context, repo string, number int, label string) error {
 	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("/repos/%s/issues/%d/labels/%s", repo, number, url.PathEscape(label)), nil, nil)
 	if se := (*statusErr)(nil); errors.As(err, &se) && se.code == http.StatusNotFound {
@@ -170,12 +191,12 @@ func (c *Client) RemoveLabel(ctx context.Context, repo string, number int, label
 	return err
 }
 
-// Comment implémente forge.Forge.
+// Comment implémente forge.TicketSource.
 func (c *Client) Comment(ctx context.Context, repo string, number int, body string) error {
 	return c.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/issues/%d/comments", repo, number), map[string]string{"body": body}, nil)
 }
 
-// CreateIssue implémente forge.Forge.
+// CreateIssue implémente forge.TicketSource.
 func (c *Client) CreateIssue(ctx context.Context, repo, title, body string) (int, string, error) {
 	var out struct {
 		Number  int    `json:"number"`
@@ -187,9 +208,10 @@ func (c *Client) CreateIssue(ctx context.Context, repo, title, body string) (int
 	return out.Number, out.HTMLURL, nil
 }
 
-// OpenDraftPR implémente forge.Forge.
-func (c *Client) OpenDraftPR(ctx context.Context, repo string, pr forge.PullRequest) (int, string, error) {
-	body := map[string]any{"title": pr.Title, "head": pr.Head, "base": pr.Base, "body": pr.Body, "draft": true}
+// OpenChangeRequest implémente forge.CodeForge par une PR en brouillon ; ses
+// labels sont posés ensuite, par l'API des issues.
+func (c *Client) OpenChangeRequest(ctx context.Context, repo string, cr forge.ChangeRequest) (int, string, error) {
+	body := map[string]any{"title": cr.Title, "head": cr.Head, "base": cr.Base, "body": cr.Body, "draft": true}
 	var out struct {
 		Number  int    `json:"number"`
 		HTMLURL string `json:"html_url"`
@@ -197,7 +219,24 @@ func (c *Client) OpenDraftPR(ctx context.Context, repo string, pr forge.PullRequ
 	if err := c.do(ctx, http.MethodPost, "/repos/"+repo+"/pulls", body, &out); err != nil {
 		return 0, "", err
 	}
+	for _, l := range cr.Labels {
+		if err := c.AddLabel(ctx, repo, out.Number, l); err != nil {
+			return out.Number, out.HTMLURL, err
+		}
+	}
 	return out.Number, out.HTMLURL, nil
+}
+
+// CommentChangeRequest implémente forge.CodeForge : une PR se commente comme
+// une issue.
+func (c *Client) CommentChangeRequest(ctx context.Context, repo string, number int, body string) error {
+	return c.Comment(ctx, repo, number, body)
+}
+
+// AddChangeRequestLabel implémente forge.CodeForge : une PR porte ses labels
+// comme une issue.
+func (c *Client) AddChangeRequestLabel(ctx context.Context, repo string, number int, label string) error {
+	return c.AddLabel(ctx, repo, number, label)
 }
 
 // MaxExcerpt borne, en caractères, l'extrait rapporté pour un check.
@@ -220,7 +259,7 @@ type checkRun struct {
 	} `json:"output"`
 }
 
-// Checks implémente forge.Forge : les check runs (GitHub Actions et autres
+// Checks implémente forge.CodeForge : les check runs (GitHub Actions et autres
 // applications) et les statuts de commit, plus les annotations d'un check
 // run en échec. Le jeton doit pouvoir lire les checks et les statuts.
 func (c *Client) Checks(ctx context.Context, repo, sha string) ([]forge.Check, error) {

@@ -54,7 +54,7 @@ func runPass(t *testing.T, f *memforge.Forge, h harness.Harness, repos ...string
 	t.Helper()
 	r, err := pass.Run(context.Background(), pass.Config{
 		Repos: repos, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
-	}, f, h, nil)
+	}, f, f, h, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func runWith(t *testing.T, f *memforge.Forge, h harness.Harness, p pass.Publishe
 	r, err := pass.Run(context.Background(), pass.Config{
 		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
 		CI: pass.CIWait{Poll: time.Millisecond, Timeout: 20 * time.Millisecond, Settle: time.Millisecond},
-	}, f, h, p)
+	}, f, f, h, p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestSucceededTicketIsPublishedAsDraftAndLeavesNoAgentLabel(t *testing.T) {
 			t.Fatalf("commentaire final = %q, attendu %q", last, want)
 		}
 	}
-	if tr := r.Tickets[0]; tr.Outcome != harness.Succeeded || tr.PullRequest != "https://forge/o/a/pull/12" {
+	if tr := r.Tickets[0]; tr.Outcome != harness.Succeeded || tr.ChangeRequest != "https://forge/o/a/pull/12" {
 		t.Fatalf("rapport = %+v", tr)
 	}
 }
@@ -358,7 +358,7 @@ func TestFailedReservationPutsTicketBackInQueue(t *testing.T) {
 
 	_, err := pass.Run(context.Background(), pass.Config{
 		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
-	}, f, h, nil)
+	}, f, f, h, nil)
 
 	if err == nil {
 		t.Fatal("erreur attendue")
@@ -390,7 +390,7 @@ func TestCancelledPassStillHandsTicketBack(t *testing.T) {
 
 	_, err := pass.Run(ctx, pass.Config{
 		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
-	}, f, cancellingHarness{cancel}, nil)
+	}, f, f, cancellingHarness{cancel}, nil)
 
 	if err != nil {
 		t.Fatal(err)
@@ -409,7 +409,7 @@ func TestDuplicateReposAreProcessedOnce(t *testing.T) {
 
 	r, err := pass.Run(context.Background(), pass.Config{
 		Repos: []string{"o/a", "O/A", "o/a"}, MaxTickets: 5, ID: "pass-test", Now: func() time.Time { return now },
-	}, f, h, nil)
+	}, f, f, h, nil)
 
 	if err != nil {
 		t.Fatal(err)

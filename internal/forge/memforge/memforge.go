@@ -1,11 +1,13 @@
-// Package memforge est une forge en mémoire, pour tester une passe sans
-// réseau : on décrit l'état initial, on lance la passe, on lit l'état final.
+// Package memforge est le faux en mémoire d'une source de tickets et d'une
+// forge de code, pour tester une passe sans réseau : on décrit l'état
+// initial, on lance la passe, on lit l'état final.
 package memforge
 
 import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/UnPoilTefal/night-shift/internal/forge"
@@ -20,32 +22,40 @@ type Issue struct {
 	Comments []string
 }
 
-// Pull est l'état d'une PR dans la forge en mémoire, avec les commentaires
-// que la passe y a postés.
-type Pull struct {
-	forge.PullRequest
+// Change est l'état d'une demande de changement dans la forge en mémoire,
+// avec ses labels (ChangeRequest.Labels) et les commentaires que la passe y a
+// postés.
+type Change struct {
+	forge.ChangeRequest
 	Number   int
-	Labels   []string
 	Comments []string
 }
 
-// Forge est une forge en mémoire, sûre en accès concurrent.
+// Forge implémente forge.TicketSource et forge.CodeForge en mémoire, sûre en
+// accès concurrent.
 type Forge struct {
 	// Fail, s'il est renseigné, est appelé avant chaque opération avec son
 	// nom ; une erreur rendue fait échouer l'opération (pannes simulées).
 	Fail func(op string) error
+	// GitURL est la base des adresses de clone que rend GitAccess : un
+	// dossier de dépôts nus pour les tests.
+	GitURL string
 
 	mu      sync.Mutex
 	files   map[string]map[string][]byte
 	issues  map[string][]*Issue
 	created map[string][]int
-	pulls   map[string][]*Pull
+	changes map[string][]*Change
 	checks  map[string][]forge.Check
+	labels  map[string][]string
 }
 
 // New crée une forge vide.
 func New() *Forge {
-	return &Forge{files: map[string]map[string][]byte{}, issues: map[string][]*Issue{}, created: map[string][]int{}, pulls: map[string][]*Pull{}, checks: map[string][]forge.Check{}}
+	return &Forge{
+		files: map[string]map[string][]byte{}, issues: map[string][]*Issue{}, created: map[string][]int{},
+		changes: map[string][]*Change{}, checks: map[string][]forge.Check{}, labels: map[string][]string{},
+	}
 }
 
 // SetFile place un fichier sur la branche par défaut d'un dépôt.
@@ -63,6 +73,25 @@ func (f *Forge) AddIssue(t forge.Ticket) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.issues[t.Repo] = append(f.issues[t.Repo], &Issue{Ticket: t})
+	for _, l := range t.Labels {
+		f.define(t.Repo, l)
+	}
+}
+
+// CloseIssue ferme un ticket.
+func (f *Forge) CloseIssue(repo string, number int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if i := f.find(repo, number); i != nil {
+		i.Closed = true
+	}
+}
+
+// RepoLabels rend les labels définis sur un dépôt, dans l'ordre de création.
+func (f *Forge) RepoLabels(repo string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.labels[repo])
 }
 
 // Issue rend une copie de l'état d'un ticket.
@@ -79,7 +108,7 @@ func (f *Forge) Issue(repo string, number int) Issue {
 	return c
 }
 
-// ReadyTickets implémente forge.Forge.
+// ReadyTickets implémente forge.TicketSource.
 func (f *Forge) ReadyTickets(ctx context.Context, repo string) ([]forge.Ticket, error) {
 	if err := f.hook(ctx, "ReadyTickets"); err != nil {
 		return nil, err
@@ -98,7 +127,7 @@ func (f *Forge) ReadyTickets(ctx context.Context, repo string) ([]forge.Ticket, 
 	return ts, nil
 }
 
-// File implémente forge.Forge.
+// File implémente forge.CodeForge.
 func (f *Forge) File(ctx context.Context, repo, path string) ([]byte, bool, error) {
 	if err := f.hook(ctx, "File"); err != nil {
 		return nil, false, err
@@ -109,29 +138,22 @@ func (f *Forge) File(ctx context.Context, repo, path string) ([]byte, bool, erro
 	return slices.Clone(data), ok, nil
 }
 
-// AddLabel implémente forge.Forge.
+// AddLabel implémente forge.TicketSource.
 func (f *Forge) AddLabel(ctx context.Context, repo string, number int, label string) error {
 	if err := f.hook(ctx, "AddLabel"); err != nil {
 		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if i := f.find(repo, number); i != nil {
-		if !slices.Contains(i.Labels, label) {
-			i.Labels = append(i.Labels, label)
-		}
-		return nil
+	i := f.find(repo, number)
+	if i == nil {
+		return fmt.Errorf("ticket %s#%d inconnu", repo, number)
 	}
-	if p := f.findPull(repo, number); p != nil {
-		if !slices.Contains(p.Labels, label) {
-			p.Labels = append(p.Labels, label)
-		}
-		return nil
-	}
-	return fmt.Errorf("ticket ou PR %s#%d inconnu", repo, number)
+	i.Labels = f.label(repo, i.Labels, label)
+	return nil
 }
 
-// RemoveLabel implémente forge.Forge.
+// RemoveLabel implémente forge.TicketSource.
 func (f *Forge) RemoveLabel(ctx context.Context, repo string, number int, label string) error {
 	if err := f.hook(ctx, "RemoveLabel"); err != nil {
 		return err
@@ -146,25 +168,22 @@ func (f *Forge) RemoveLabel(ctx context.Context, repo string, number int, label 
 	return nil
 }
 
-// Comment implémente forge.Forge.
+// Comment implémente forge.TicketSource.
 func (f *Forge) Comment(ctx context.Context, repo string, number int, body string) error {
 	if err := f.hook(ctx, "Comment"); err != nil {
 		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if i := f.find(repo, number); i != nil {
-		i.Comments = append(i.Comments, body)
-		return nil
+	i := f.find(repo, number)
+	if i == nil {
+		return fmt.Errorf("ticket %s#%d inconnu", repo, number)
 	}
-	if p := f.findPull(repo, number); p != nil {
-		p.Comments = append(p.Comments, body)
-		return nil
-	}
-	return fmt.Errorf("ticket ou PR %s#%d inconnu", repo, number)
+	i.Comments = append(i.Comments, body)
+	return nil
 }
 
-// CreateIssue implémente forge.Forge ; l'URL rendue est
+// CreateIssue implémente forge.TicketSource ; l'URL rendue est
 // memforge://<dépôt>/issues/<n>.
 func (f *Forge) CreateIssue(ctx context.Context, repo, title, body string) (int, string, error) {
 	if err := f.hook(ctx, "CreateIssue"); err != nil {
@@ -191,43 +210,88 @@ func (f *Forge) CreatedIssues(repo string) []Issue {
 	return out
 }
 
-// OpenDraftPR implémente forge.Forge ; comme sur GitHub, issues et PR
-// partagent la même numérotation. L'URL rendue est
+// GitAccess implémente forge.CodeForge : <GitURL>/<dépôt>.git, sans
+// utilisateur attendu avec le jeton.
+func (f *Forge) GitAccess(repo string) forge.GitAccess {
+	return forge.GitAccess{
+		URL:      strings.TrimSuffix(f.GitURL, "/") + "/" + repo + ".git",
+		Identity: forge.Identity{Name: "night-shift", Email: "night-shift@memforge.invalid"},
+		Agent:    forge.Identity{Name: "night-shift agent", Email: "night-shift-agent@memforge.invalid"},
+	}
+}
+
+// OpenChangeRequest implémente forge.CodeForge ; comme sur GitHub, tickets et
+// demandes de changement partagent la même numérotation. L'URL rendue est
 // memforge://<dépôt>/pull/<n>.
-func (f *Forge) OpenDraftPR(ctx context.Context, repo string, pr forge.PullRequest) (int, string, error) {
-	if err := f.hook(ctx, "OpenDraftPR"); err != nil {
+func (f *Forge) OpenChangeRequest(ctx context.Context, repo string, cr forge.ChangeRequest) (int, string, error) {
+	if err := f.hook(ctx, "OpenChangeRequest"); err != nil {
 		return 0, "", err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n := f.next(repo)
-	f.pulls[repo] = append(f.pulls[repo], &Pull{PullRequest: pr, Number: n})
+	labels := cr.Labels
+	cr.Labels = nil
+	for _, l := range labels {
+		cr.Labels = f.label(repo, cr.Labels, l)
+	}
+	f.changes[repo] = append(f.changes[repo], &Change{ChangeRequest: cr, Number: n})
 	return n, fmt.Sprintf("memforge://%s/pull/%d", repo, n), nil
 }
 
-// DraftPRs rend les PR en brouillon ouvertes sur un dépôt.
-func (f *Forge) DraftPRs(repo string) []forge.PullRequest {
+// CommentChangeRequest implémente forge.CodeForge.
+func (f *Forge) CommentChangeRequest(ctx context.Context, repo string, number int, body string) error {
+	if err := f.hook(ctx, "CommentChangeRequest"); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]forge.PullRequest, 0, len(f.pulls[repo]))
-	for _, p := range f.pulls[repo] {
-		out = append(out, p.PullRequest)
+	c := f.findChange(repo, number)
+	if c == nil {
+		return fmt.Errorf("demande de changement %s#%d inconnue", repo, number)
+	}
+	c.Comments = append(c.Comments, body)
+	return nil
+}
+
+// AddChangeRequestLabel implémente forge.CodeForge.
+func (f *Forge) AddChangeRequestLabel(ctx context.Context, repo string, number int, label string) error {
+	if err := f.hook(ctx, "AddChangeRequestLabel"); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.findChange(repo, number)
+	if c == nil {
+		return fmt.Errorf("demande de changement %s#%d inconnue", repo, number)
+	}
+	c.Labels = f.label(repo, c.Labels, label)
+	return nil
+}
+
+// ChangeRequests rend les demandes de changement ouvertes sur un dépôt.
+func (f *Forge) ChangeRequests(repo string) []forge.ChangeRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]forge.ChangeRequest, 0, len(f.changes[repo]))
+	for _, c := range f.changes[repo] {
+		out = append(out, c.ChangeRequest)
 	}
 	return out
 }
 
-// Pull rend une copie de l'état d'une PR.
-func (f *Forge) Pull(repo string, number int) Pull {
+// Change rend une copie de l'état d'une demande de changement.
+func (f *Forge) Change(repo string, number int) Change {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	p := f.findPull(repo, number)
-	if p == nil {
-		panic(fmt.Sprintf("memforge : PR %s#%d inconnue", repo, number))
+	c := f.findChange(repo, number)
+	if c == nil {
+		panic(fmt.Sprintf("memforge : demande de changement %s#%d inconnue", repo, number))
 	}
-	c := *p
-	c.Labels = slices.Clone(p.Labels)
-	c.Comments = slices.Clone(p.Comments)
-	return c
+	cp := *c
+	cp.Labels = slices.Clone(c.Labels)
+	cp.Comments = slices.Clone(c.Comments)
+	return cp
 }
 
 // SetChecks fixe les checks de CI rapportés sur un commit.
@@ -237,7 +301,7 @@ func (f *Forge) SetChecks(repo, sha string, checks ...forge.Check) {
 	f.checks[repo+"@"+sha] = checks
 }
 
-// Checks implémente forge.Forge.
+// Checks implémente forge.CodeForge.
 func (f *Forge) Checks(ctx context.Context, repo, sha string) ([]forge.Check, error) {
 	if err := f.hook(ctx, "Checks"); err != nil {
 		return nil, err
@@ -259,22 +323,38 @@ func (f *Forge) hook(ctx context.Context, op string) error {
 	return nil
 }
 
-// next rend le prochain numéro libre d'un dépôt, issues et PR confondues.
+// label pose label dans labels sans le doubler, et le définit sur le dépôt.
+func (f *Forge) label(repo string, labels []string, label string) []string {
+	f.define(repo, label)
+	if slices.Contains(labels, label) {
+		return labels
+	}
+	return append(labels, label)
+}
+
+func (f *Forge) define(repo, label string) {
+	if !slices.Contains(f.labels[repo], label) {
+		f.labels[repo] = append(f.labels[repo], label)
+	}
+}
+
+// next rend le prochain numéro libre d'un dépôt, tickets et demandes de
+// changement confondus.
 func (f *Forge) next(repo string) int {
 	n := 1
 	for _, i := range f.issues[repo] {
 		n = max(n, i.Number+1)
 	}
-	for _, p := range f.pulls[repo] {
-		n = max(n, p.Number+1)
+	for _, c := range f.changes[repo] {
+		n = max(n, c.Number+1)
 	}
 	return n
 }
 
-func (f *Forge) findPull(repo string, number int) *Pull {
-	for _, p := range f.pulls[repo] {
-		if p.Number == number {
-			return p
+func (f *Forge) findChange(repo string, number int) *Change {
+	for _, c := range f.changes[repo] {
+		if c.Number == number {
+			return c
 		}
 	}
 	return nil

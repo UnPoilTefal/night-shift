@@ -1,8 +1,8 @@
 // Package gitrepo exécute git pour les étapes de confiance (sélection et
-// Publication) : clone du dépôt cible et push d'une branche. Le jeton de
-// forge passe par l'environnement de git, jamais par l'URL ni par la
-// configuration du clone, si bien qu'un clone confié à l'agent n'en garde
-// aucune trace.
+// Publication) : clone du dépôt cible et push d'une branche, selon l'accès
+// que décrit sa forge de code. Le jeton de forge passe par l'environnement
+// de git, jamais par l'URL ni par la configuration du clone, si bien qu'un
+// clone confié à l'agent n'en garde aucune trace.
 package gitrepo
 
 import (
@@ -13,27 +13,22 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/UnPoilTefal/night-shift/internal/forge"
 )
 
-// Remote désigne une forge git : <BaseURL>/<propriétaire>/<nom>.git.
+// Remote désigne un dépôt cible tel que sa forge de code le décrit.
 type Remote struct {
-	// BaseURL est https://github.com, ou un dossier pour les tests.
-	BaseURL string
-	// Token, s'il est renseigné, est présenté en en-tête HTTP.
+	forge.GitAccess
+	// Token, s'il est renseigné, est présenté en en-tête HTTP avec
+	// GitAccess.User.
 	Token string
-	// Name et Email signent les commits que git crée lui-même.
-	Name, Email string
 }
 
-// URL rend l'adresse de clone d'un dépôt.
-func (r Remote) URL(repo string) string {
-	return strings.TrimSuffix(r.BaseURL, "/") + "/" + repo + ".git"
-}
-
-// Clone clone repo dans dir et rend sa branche par défaut et son commit de
-// tête.
-func (r Remote) Clone(ctx context.Context, repo, dir string) (branch, sha string, err error) {
-	if _, err := r.Git(ctx, "", "clone", "--quiet", "--no-tags", r.URL(repo), dir); err != nil {
+// Clone clone le dépôt dans dir et rend sa branche par défaut et son commit
+// de tête.
+func (r Remote) Clone(ctx context.Context, dir string) (branch, sha string, err error) {
+	if _, err := r.Git(ctx, "", "clone", "--quiet", "--no-tags", r.URL, dir); err != nil {
 		return "", "", err
 	}
 	if branch, err = r.Git(ctx, dir, "symbolic-ref", "--short", "HEAD"); err != nil {
@@ -54,11 +49,15 @@ func (r Remote) Git(ctx context.Context, dir string, args ...string) (string, er
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_TERMINAL_PROMPT=0",
-		"GIT_AUTHOR_NAME="+r.name(), "GIT_AUTHOR_EMAIL="+r.email(),
-		"GIT_COMMITTER_NAME="+r.name(), "GIT_COMMITTER_EMAIL="+r.email(),
 	)
+	if id := r.Identity; id != (forge.Identity{}) {
+		cmd.Env = append(cmd.Env,
+			"GIT_AUTHOR_NAME="+id.Name, "GIT_AUTHOR_EMAIL="+id.Email,
+			"GIT_COMMITTER_NAME="+id.Name, "GIT_COMMITTER_EMAIL="+id.Email,
+		)
+	}
 	if r.Token != "" {
-		auth := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + r.Token))
+		auth := base64.StdEncoding.EncodeToString([]byte(r.User + ":" + r.Token))
 		cmd.Env = append(cmd.Env,
 			"GIT_CONFIG_COUNT=1",
 			"GIT_CONFIG_KEY_0=http.extraHeader",
@@ -71,20 +70,6 @@ func (r Remote) Git(ctx context.Context, dir string, args ...string) (string, er
 		return "", fmt.Errorf("git %s : %w : %s", args[0], err, r.redact(strings.TrimSpace(stderr.String())))
 	}
 	return strings.TrimSpace(stdout.String()), nil
-}
-
-func (r Remote) name() string {
-	if r.Name != "" {
-		return r.Name
-	}
-	return "night-shift"
-}
-
-func (r Remote) email() string {
-	if r.Email != "" {
-		return r.Email
-	}
-	return "night-shift@users.noreply.github.com"
 }
 
 func (r Remote) redact(s string) string {
