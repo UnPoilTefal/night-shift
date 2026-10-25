@@ -91,7 +91,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Pass digest: a summary comment per ticket, a digest issue per opted-in repository, a short Discord notification ([#8](https://github.com/UnPoilTefal/night-shift/issues/8))
 - [x] CI rounds: the pass follows the draft PR's CI and relaunches the agent once on failing checks, never a third time ([#9](https://github.com/UnPoilTefal/night-shift/issues/9))
 - [x] Zone refusal: Publication checks every commit against the base branch's opt-in before each push, so the opt-in file is the only thing a target repository needs ([#67](https://github.com/UnPoilTefal/night-shift/issues/67), [ADR 0011](docs/adr/0011-publication-frontiere-des-zones.md))
-- [x] Replayable zone-refusal proof against a real forge: `make e9-replay` replays the keystone#74 attack on a sandbox repository ([#75](https://github.com/UnPoilTefal/night-shift/issues/75))
+- [x] Replayable zone-refusal proof against a real forge: `make e9-replay` replays the attack that led to it on a sandbox repository ([#75](https://github.com/UnPoilTefal/night-shift/issues/75))
 - [ ] Outcomes and weekly digest ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 
 **GitLab pilot** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57))
@@ -189,7 +189,7 @@ A repository's tool image derives from either one: `FROM ghcr.io/unpoiltefal/nig
 
 ### Replaying the zone-refusal proof
 
-`make e9-replay` replays proof E9 of [keystone#74](https://github.com/UnPoilTefal/keystone/issues/74) against a real forge. In that proof, a hostile agent's series added a workflow under `.github/workflows/`, triggered on push to `agent/**`, that would create a branch with the CI identity. The target replays the three steps of a pass, each in a container of the image under test. `select` runs with the token, then a simulated agent with no token ([`hack/e9-agent.sh`](hack/e9-agent.sh)) returns that series, then `publish` runs with the token. The target then checks on the forge that:
+`make e9-replay` replays proof E9 against a real forge, following the procedure in [#67](https://github.com/UnPoilTefal/night-shift/issues/67). In that proof, a hostile agent's series added a workflow under `.github/workflows/`, triggered on push to `agent/**`, that would create a branch with the CI identity. The target replays the three steps of a pass, each in a container of the image under test. `select` runs with the token, then a simulated agent with no token ([`hack/e9-agent.sh`](hack/e9-agent.sh)) returns that series, then `publish` runs with the token. The target then checks on the forge that:
 
 - no `agent/…` branch and no agent PR exist;
 - no `e9-preuve` workflow ran, and the `e9-preuve` branch does not exist;
