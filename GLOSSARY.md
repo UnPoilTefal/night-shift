@@ -41,12 +41,12 @@ _FR_: mission
 _Avoid_: tâche, type de tâche, job, task type
 
 **Ticket source**:
-L'endroit où vivent les tickets prêts d'un poste : un repo GitHub, un projet GitLab ou un projet Jira. C'est le périmètre sur lequel une seule passe est active à la fois.
+L'endroit où vivent les tickets prêts d'un poste, quel que soit l'outil qui les porte : un repo GitHub, un projet GitLab, un projet Jira, ou tout outil qui a son adaptateur. C'est le périmètre sur lequel une seule passe est active à la fois.
 _FR_: source de tickets
 _Avoid_: backlog, tracker, repo
 
 **Target repository**:
-Le dépôt de code où une demande de changement d'agent est ouverte et où vit l'adhésion. Il se confond avec la source de tickets sur GitHub et GitLab ; avec Jira, le brief le désigne parmi ceux qu'autorise le poste.
+Le dépôt de code où une demande de changement d'agent est ouverte et où vit l'adhésion. Il se confond avec la source de tickets quand la forge de code sert aussi de tracker (GitHub, GitLab) ; avec un tracker séparé (Jira), le brief le désigne parmi ceux qu'autorise le poste.
 _FR_: dépôt cible
 _Avoid_: repo de destination, target
 
@@ -54,6 +54,28 @@ _Avoid_: repo de destination, target
 Le marquage qui réserve un ticket prêt à une passe, pour qu'aucun autre agent ni humain ne le prenne.
 _FR_: réservation
 _Avoid_: lock, claim
+
+### Outils
+
+**Code forge**:
+L'outil qui héberge le dépôt cible : le code, ses branches, ses demandes de changement et leurs checks. GitHub et GitLab en sont deux ; night-shift n'en suppose aucune.
+_FR_: forge de code
+_Avoid_: GitHub, GitLab (noms d'un outil), SCM
+
+**Harness**:
+L'outil qui fait travailler un agent sur un clone à partir d'un brief, et rend sa série de commits et un résultat structuré. Claude Code en est un.
+_FR_: harnais
+_Avoid_: agent (le modèle au travail), runner, wrapper
+
+**Adapter**:
+Le branchement d'un outil concret sur un contrat de night-shift : une source de tickets, une forge de code, un harnais ou une notification. Ajouter un outil, c'est ajouter un adaptateur, jamais toucher la passe.
+_FR_: adaptateur
+_Avoid_: connecteur, plugin, intégration, driver
+
+**Contract test suite**:
+Le jeu de scénarios commun qu'un adaptateur doit passer pour être accepté, joué aussi contre le faux en mémoire, qui reste ainsi fidèle aux vrais outils.
+_FR_: suite de contrat
+_Avoid_: tests d'intégration, tests de conformité
 
 ### Exécution
 

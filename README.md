@@ -42,6 +42,8 @@ flowchart LR
 3. **Publication**: a step with no model involved. It applies the series, checks the zones (below), pushes an `agent/…` branch with an attribution trailer and opens a **draft** PR. It never merges and never pushes a tag. It then follows the PR's CI: if checks fail, the pass relaunches the agent **once**, in a fresh container on a fresh clone of the published branch, with the names and excerpts of the failing checks. There is never a third round.
 4. **Zones**: before every push, in both rounds, Publication judges **each commit** of the series against the opt-in of the base branch, never the one in the series. If a single commit touches a **forbidden zone** (CI, release pipeline, agent configuration), nothing is pushed: this is a **zone refusal**, and the ticket goes back to a human. This holds even when a later commit reverts the change, because every pushed commit stays in the branch history and can trigger a workflow. A **sensitive zone** (dependencies, for instance) is pushed, and the PR names the paths and gets the `sensitive-zone` label, so that a human decides.
 
+**Tools behind contracts.** night-shift never talks to a tool directly. The pass, Publication and the digest only know four contracts: **ticket source**, **code forge**, **harness** and notification. Each tool plugs in through its own **adapter**: GitHub for the forge, Claude Code for the harness, Discord for notifications. Supporting GitLab, another forge or Jira means writing an adapter that passes the shared **contract test suite**, without touching the pass ([ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md)). Today GitHub is the only forge adapter, and the code still uses a single contract for tickets and code; [#80](https://github.com/UnPoilTefal/night-shift/issues/80) splits it.
+
 ## Security principles
 
 An agent treats whatever it reads as instructions, and a ticket may carry a prompt injection. night-shift therefore never combines **untrusted content**, **write access** and **network or secret access** at the same time (the *lethal trifecta*).
@@ -94,15 +96,17 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Replayable zone-refusal proof against a real forge: `make e9-replay` replays the attack that led to it on a sandbox repository ([#75](https://github.com/UnPoilTefal/night-shift/issues/75))
 - [ ] Outcomes and weekly digest ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 
-**GitLab pilot** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57))
+**Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
 
-- [ ] Ticket source and code forge as two separate contracts, with one contract test suite for every adapter
-- [ ] GitLab adapter: issues as a ticket source, draft merge requests, pipelines for CI rounds, self-managed instances
+- [x] GitHub adapter
+- [ ] Ticket source and code forge as two separate contracts, with one contract test suite for every adapter ([#80](https://github.com/UnPoilTefal/night-shift/issues/80))
+- [ ] Choose the forge adapter of a pass with an option ([#81](https://github.com/UnPoilTefal/night-shift/issues/81))
+- [ ] GitLab adapter, the first one added: issues as a ticket source, draft merge requests, pipelines for CI rounds, self-managed instances ([#82](https://github.com/UnPoilTefal/night-shift/issues/82)), then its deployment example and guides ([#83](https://github.com/UnPoilTefal/night-shift/issues/83))
 
 **Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
 
 - [x] Increment 0: `Shift` and `Pass` custom resources, a scheduled pass per cron occurrence, one active pass per shift, a hardened orchestrator Job ([#13](https://github.com/UnPoilTefal/night-shift/issues/13))
-- [ ] Increments 1 to 9, from a fake ticket source and one Job per ticket up to an agent with context, harness and tools ([#14](https://github.com/UnPoilTefal/night-shift/issues/14) to [#22](https://github.com/UnPoilTefal/night-shift/issues/22))
+- [ ] Next increments, to be revised with the platform spec once the forge contracts land: from a fake ticket source and one Job per ticket up to parity with the solo tier, then tools ([#14](https://github.com/UnPoilTefal/night-shift/issues/14) to [#22](https://github.com/UnPoilTefal/night-shift/issues/22))
 
 ## Development
 
