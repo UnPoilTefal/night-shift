@@ -176,6 +176,19 @@ func TestOpenChangeRequestAlwaysAsksForADraft(t *testing.T) {
 	}
 }
 
+func TestGitAccessPresentsTheTokenAsXAccessTokenWithNoreplyIdentities(t *testing.T) {
+	got := github.New(github.DefaultBaseURL, "https://github.com/", token).GitAccess("o/a")
+	want := forge.GitAccess{
+		URL:      "https://github.com/o/a.git",
+		User:     "x-access-token",
+		Identity: forge.Identity{Name: "night-shift", Email: "night-shift@users.noreply.github.com"},
+		Agent:    forge.Identity{Name: "night-shift agent", Email: "night-shift-agent@users.noreply.github.com"},
+	}
+	if got != want {
+		t.Fatalf("GitAccess = %+v\nattendu %+v", got, want)
+	}
+}
+
 func TestCreateIssue(t *testing.T) {
 	c := server(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/repos/o/a/issues" {

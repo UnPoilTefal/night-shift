@@ -155,8 +155,8 @@ type Published struct {
 // de l'agent sur une branche agent/, la pousse et ouvre la demande de
 // changement en brouillon. Quand la tâche porte déjà une demande (tour de
 // relance), elle pousse sur sa branche sans en ouvrir d'autre. C'est la seule
-// étape qui écrit du code sur la forge : elle refuse, par un *ZoneRefusalError, de pousser une série qui
-// touche une zone interdite.
+// étape qui écrit du code sur la forge : elle refuse, par un
+// *ZoneRefusalError, de pousser une série qui touche une zone interdite.
 type Publisher interface {
 	Publish(ctx context.Context, task harness.Task, res harness.Result) (Published, error)
 }

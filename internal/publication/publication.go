@@ -32,9 +32,8 @@ type Git struct {
 // Publish implémente pass.Publisher. Au premier tour, elle crée la branche
 // agent/ sur le commit de base et ouvre la demande de changement ; à une
 // relance, elle ajoute la série par-dessus la tête de la demande et pousse
-// sans forcer. Avant chaque
-// push, elle juge chaque commit de la série contre l'adhésion du commit de
-// base du premier tour (ADR 0011) : une zone interdite touchée, ou une
+// sans forcer. Avant chaque push, elle juge chaque commit de la série contre
+// l'adhésion du commit de base du premier tour (ADR 0011) : une zone interdite touchée, ou une
 // adhésion absente ou invalide, et rien n'est poussé ; une zone sensible
 // touchée est signalée sur la demande.
 func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result) (pass.Published, error) {
@@ -137,7 +136,7 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 			"Elle n'est jamais passée en prête ni mergée par night-shift : à relire par un humain.%s",
 			t.Number, oneLine(task.PassID), oneLine(agent), sensitiveNote(flagged)),
 	})
-	if url == "" {
+	if err != nil && url == "" {
 		return pass.Published{}, err
 	}
 	return pass.Published{Draft: forge.Draft{Number: number, URL: url, Branch: branch}, Head: pushed}, err
