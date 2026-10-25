@@ -38,6 +38,30 @@ func TestTaskRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTaskWrittenWithoutTargetRepoTargetsTheTicketRepo(t *testing.T) {
+	d := dirs(t)
+	// Une tâche de relance écrite par la version précédente : ni dépôt cible,
+	// ni identité de l'agent.
+	legacy := `{
+  "Ticket": {"Repo": "o/a", "Number": 7, "Title": "T"},
+  "Brief": "# T\n", "PassID": "pass-1", "BaseBranch": "main", "BaseSHA": "def", "OptInSHA": "abc",
+  "Round": 2, "PullRequest": {"Number": 12, "URL": "https://forge/o/a/pull/12", "Branch": "agent/7-t"}
+}`
+	if err := os.WriteFile(filepath.Join(d.State, "task.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := d.ReadTask()
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if got.TargetRepo != "o/a" {
+		t.Fatalf("dépôt cible = %q, attendu celui du ticket, o/a", got.TargetRepo)
+	}
+	if cr := got.ChangeRequest; cr == nil || cr.Number != 12 || cr.Branch != "agent/7-t" {
+		t.Fatalf("demande de changement relue = %+v", cr)
+	}
+}
+
 func TestReportRoundTrip(t *testing.T) {
 	d := dirs(t)
 	if _, ok, err := d.ReadReport(); ok || err != nil {

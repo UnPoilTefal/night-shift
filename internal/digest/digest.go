@@ -43,7 +43,7 @@ type Result struct {
 // un dépôt écarté (adhésion absente ou invalide) ou injoignable n'en reçoit
 // pas. Elle notifie ensuite n, s'il est configuré. L'erreur rendue ne
 // concerne que les issues.
-func Publish(ctx context.Context, f forge.Forge, n Notifier, r pass.Report) (Result, error) {
+func Publish(ctx context.Context, f forge.TicketSource, n Notifier, r pass.Report) (Result, error) {
 	var res Result
 	var errs []error
 	failed := 0
@@ -89,7 +89,7 @@ func Body(r pass.Report, repo string, notifier bool) string {
 	if len(tickets) > 0 {
 		fmt.Fprintf(&b, "## Tickets traités (%d)\n\n| Ticket | Résultat provisoire | PR | Durée | Coût |\n|---|---|---|---|---|\n", len(tickets))
 		for _, t := range tickets {
-			pr := t.PullRequest
+			pr := t.ChangeRequest
 			if pr == "" {
 				pr = "–"
 			}

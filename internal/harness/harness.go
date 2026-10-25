@@ -30,22 +30,30 @@ const (
 // construit par la passe, seul contenu du ticket que l'agent reçoit.
 type Task struct {
 	Ticket forge.Ticket
-	Brief  string
-	PassID string
+	// TargetRepo est le dépôt cible, où l'agent travaille et où la
+	// Publication ouvre la demande de changement ; il peut se confondre avec
+	// le dépôt du ticket.
+	TargetRepo string
+	Brief      string
+	PassID     string
 	// BaseBranch et BaseSHA désignent le commit du dépôt cible sur lequel
 	// l'agent travaille ; la Publication y applique sa série de commits.
 	BaseBranch, BaseSHA string
+	// AgentIdentity signe les commits de l'agent, selon la forge de code du
+	// dépôt cible.
+	AgentIdentity forge.Identity
 	// OptInSHA est le commit de base du premier tour : la Publication y lit
 	// l'adhésion qui juge chaque tour, jamais dans la série de l'agent ni à
-	// la tête de la PR (ADR 0011).
+	// la tête de la demande de changement (ADR 0011).
 	OptInSHA string
 	// Round numérote le passage de l'agent sur le ticket, à partir de 1. À
-	// partir du deuxième, l'agent repart de la PR publiée au tour précédent :
-	// BaseSHA est la tête de sa branche et CIFailures les checks qui y
-	// échouent.
-	Round       int
-	PullRequest *forge.Draft
-	CIFailures  []forge.Check
+	// partir du deuxième, l'agent repart de la demande de changement publiée
+	// au tour précédent : BaseSHA est la tête de sa branche et CIFailures les
+	// checks qui y échouent. La clé JSON de ChangeRequest reste celle des
+	// versions précédentes, pour relire leurs tâches.
+	Round         int
+	ChangeRequest *forge.Draft `json:"PullRequest"`
+	CIFailures    []forge.Check
 	// PriorCostUSD et PriorDuration cumulent les tours précédents.
 	PriorCostUSD  float64
 	PriorDuration time.Duration

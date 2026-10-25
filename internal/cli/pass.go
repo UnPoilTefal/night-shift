@@ -73,8 +73,8 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 	// cours sont tout de même rendus, avec un contexte de nettoyage propre.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	f := github.New(*apiURL, token)
-	report, err := pass.Run(ctx, cfg, f, harness.Stub{}, nil)
+	f := github.New(*apiURL, github.DefaultGitURL, token)
+	report, err := pass.Run(ctx, cfg, f, f, harness.Stub{}, nil)
 	printReport(stdout, report)
 	code := digestCode(ctx, f, report, stdout, stderr, "pass")
 	if err != nil {
@@ -107,8 +107,8 @@ func printRepos(w io.Writer, r pass.Report) {
 func printTickets(w io.Writer, ts []pass.TicketReport) {
 	for _, t := range ts {
 		_, _ = fmt.Fprintf(w, "ticket %s#%d « %s » : %s (%s)\n", t.Repo, t.Number, t.Title, t.Outcome, t.Reason)
-		if t.PullRequest != "" {
-			_, _ = fmt.Fprintf(w, "PR en brouillon : %s\n", t.PullRequest)
+		if t.ChangeRequest != "" {
+			_, _ = fmt.Fprintf(w, "PR en brouillon : %s\n", t.ChangeRequest)
 		}
 	}
 }

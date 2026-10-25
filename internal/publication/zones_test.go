@@ -46,6 +46,7 @@ func zoneRepo(t *testing.T) (*testgit.Repo, *testgit.Remote, harness.Task) {
 	base := src.Out("rev-parse", "HEAD")
 	return src, remote, harness.Task{
 		Ticket:     forge.Ticket{Repo: "o/a", Number: 7, Title: "Tâche"},
+		TargetRepo: "o/a",
 		PassID:     "pass-42",
 		BaseBranch: "main",
 		BaseSHA:    base,
@@ -79,7 +80,7 @@ func series(t *testing.T, src *testgit.Repo, base string) [][]byte {
 
 func publish(t *testing.T, remote *testgit.Remote, f *memforge.Forge, task harness.Task, patches [][]byte) (pass.Published, error) {
 	t.Helper()
-	p := publication.Git{Forge: f, GitURL: remote.Base}
+	p := publication.Git{Code: gitForge(f, remote)}
 	return p.Publish(context.Background(), task, harness.Result{Outcome: harness.Succeeded, Agent: "claude", Patches: patches})
 }
 
@@ -99,7 +100,7 @@ func assertRefused(t *testing.T, remote *testgit.Remote, f *memforge.Forge, err 
 	if branches := remote.Out("branch", "--list", "agent/*"); branches != "" {
 		t.Fatalf("branche poussée malgré le refus : %q", branches)
 	}
-	if prs := f.DraftPRs("o/a"); len(prs) != 0 {
+	if prs := f.ChangeRequests("o/a"); len(prs) != 0 {
 		t.Fatalf("PR ouverte malgré le refus : %+v", prs)
 	}
 }
@@ -255,7 +256,7 @@ func firstRound(t *testing.T, src *testgit.Repo, remote *testgit.Remote, f *memf
 	src.Git("fetch", "-q", remote.Dir(), first.Draft.Branch)
 	src.Git("reset", "-q", "--hard", first.Head)
 	retry := task
-	retry.Round, retry.BaseSHA, retry.PullRequest = 2, first.Head, &first.Draft
+	retry.Round, retry.BaseSHA, retry.ChangeRequest = 2, first.Head, &first.Draft
 	return retry
 }
 
@@ -272,10 +273,10 @@ func TestRetryRoundTouchingAForbiddenZoneLeavesThePullRequestAlone(t *testing.T)
 	if !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, ".github/workflows/e9.yml") {
 		t.Fatalf("erreur = %v, attendu un refus de zone", err)
 	}
-	if got := remote.Out("rev-parse", retry.PullRequest.Branch); got != retry.BaseSHA {
+	if got := remote.Out("rev-parse", retry.ChangeRequest.Branch); got != retry.BaseSHA {
 		t.Fatalf("tête de la PR = %s, attendu inchangée %s", got, retry.BaseSHA)
 	}
-	if len(f.DraftPRs("o/a")) != 1 {
+	if len(f.ChangeRequests("o/a")) != 1 {
 		t.Fatal("une autre PR a été ouverte")
 	}
 }
@@ -288,7 +289,7 @@ func TestRetryRoundReadsTheOptInOfTheFirstRoundBase(t *testing.T) {
 	// la relance reste jugée par l'adhésion du commit de base.
 	src.Write(optin.Path, strings.Replace(optIn, `  - ".github/**"`, `  - "vendor/**"`, 1))
 	src.Commit("humain : adhésion")
-	src.Git("push", "-q", remote.Dir(), "HEAD:"+retry.PullRequest.Branch)
+	src.Git("push", "-q", remote.Dir(), "HEAD:"+retry.ChangeRequest.Branch)
 	retry.BaseSHA = src.Out("rev-parse", "HEAD")
 	src.Write(".github/workflows/e9.yml", "on: push\n")
 	agentCommit(src, "fix: workflow")
@@ -299,7 +300,7 @@ func TestRetryRoundReadsTheOptInOfTheFirstRoundBase(t *testing.T) {
 	if !errors.As(err, &refusal) {
 		t.Fatalf("erreur = %v, attendu un refus de zone", err)
 	}
-	if got := remote.Out("rev-parse", retry.PullRequest.Branch); got != retry.BaseSHA {
+	if got := remote.Out("rev-parse", retry.ChangeRequest.Branch); got != retry.BaseSHA {
 		t.Fatal("la branche de la PR a bougé")
 	}
 }
@@ -334,7 +335,7 @@ func TestSensitiveZoneIsPushedAndFlaggedOnTheDraft(t *testing.T) {
 	if got := remote.Out("rev-parse", pub.Draft.Branch); got != pub.Head {
 		t.Fatal("série non poussée")
 	}
-	pr := f.Pull("o/a", pub.Draft.Number)
+	pr := f.Change("o/a", pub.Draft.Number)
 	if !slices.Contains(pr.Labels, forge.LabelSensitiveZone) {
 		t.Fatalf("labels de la PR = %v, attendu %s", pr.Labels, forge.LabelSensitiveZone)
 	}
@@ -347,7 +348,7 @@ func TestSensitiveZoneOnRetryRoundLabelsAndCommentsThePullRequest(t *testing.T) 
 	src, remote, task := zoneRepo(t)
 	f := memforge.New()
 	retry := firstRound(t, src, remote, f, task)
-	if pr := f.Pull("o/a", retry.PullRequest.Number); len(pr.Labels) != 0 || len(pr.Comments) != 0 {
+	if pr := f.Change("o/a", retry.ChangeRequest.Number); len(pr.Labels) != 0 || len(pr.Comments) != 0 {
 		t.Fatalf("PR du premier tour = %+v, attendu sans label ni commentaire", pr)
 	}
 	src.Write("deploy/app.yaml", "replicas: 3\n")
@@ -357,7 +358,7 @@ func TestSensitiveZoneOnRetryRoundLabelsAndCommentsThePullRequest(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	pr := f.Pull("o/a", retry.PullRequest.Number)
+	pr := f.Change("o/a", retry.ChangeRequest.Number)
 	if !slices.Contains(pr.Labels, forge.LabelSensitiveZone) || len(pr.Comments) != 1 || !strings.Contains(pr.Comments[0], "`deploy/app.yaml`") {
 		t.Fatalf("PR = %+v, attendu le label et un commentaire qui nomme le chemin", pr)
 	}

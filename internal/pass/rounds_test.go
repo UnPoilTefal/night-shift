@@ -44,10 +44,10 @@ type forgePublisher struct {
 func (p *forgePublisher) Publish(ctx context.Context, t harness.Task, _ harness.Result) (pass.Published, error) {
 	p.tasks = append(p.tasks, t)
 	head := fmt.Sprintf("head-%d", len(p.tasks))
-	if t.PullRequest != nil {
-		return pass.Published{Draft: *t.PullRequest, Head: head}, nil
+	if t.ChangeRequest != nil {
+		return pass.Published{Draft: *t.ChangeRequest, Head: head}, nil
 	}
-	n, url, err := p.f.OpenDraftPR(ctx, t.Ticket.Repo, forge.PullRequest{Head: "agent/7", Base: "main", Title: t.Ticket.Title})
+	n, url, err := p.f.OpenChangeRequest(ctx, t.TargetRepo, forge.ChangeRequest{Head: "agent/7", Base: "main", Title: t.Ticket.Title})
 	return pass.Published{Draft: forge.Draft{Number: n, URL: url, Branch: "agent/7"}, Head: head}, err
 }
 
@@ -70,7 +70,7 @@ func runRounds(t *testing.T, f *memforge.Forge, h harness.Harness, rounds int) (
 	r, err := pass.Run(context.Background(), pass.Config{
 		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
 		CI: pass.CIWait{Poll: time.Millisecond, Timeout: 50 * time.Millisecond, Settle: 5 * time.Millisecond}, Rounds: rounds,
-	}, f, h, p)
+	}, f, f, h, p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestGreenCIOnFirstRoundEndsWithTheDraft(t *testing.T) {
 	if c := lastComment(i); !strings.Contains(c, "memforge://o/a/pull/8") || !strings.Contains(c, "CI verte") {
 		t.Fatalf("commentaire final = %q", c)
 	}
-	if tr := r.Tickets[0]; tr.Outcome != harness.Succeeded || tr.PullRequest != "memforge://o/a/pull/8" {
+	if tr := r.Tickets[0]; tr.Outcome != harness.Succeeded || tr.ChangeRequest != "memforge://o/a/pull/8" {
 		t.Fatalf("rapport = %+v", tr)
 	}
 }
@@ -114,7 +114,7 @@ func TestRedCIRelaunchesTheAgentOnTheSameBranch(t *testing.T) {
 		t.Fatalf("l'agent a tourné %d fois, attendu deux", len(h.tasks))
 	}
 	retry := h.tasks[1]
-	if retry.Round != 2 || retry.BaseSHA != "head-1" || retry.PullRequest == nil || retry.PullRequest.Number != 8 {
+	if retry.Round != 2 || retry.BaseSHA != "head-1" || retry.ChangeRequest == nil || retry.ChangeRequest.Number != 8 {
 		t.Fatalf("tâche du deuxième tour = %+v, attendu le tour 2 sur la tête publiée de la PR #8", retry)
 	}
 	if len(retry.CIFailures) != 1 || retry.CIFailures[0].Name != "test" || retry.CIFailures[0].Excerpt != "--- FAIL: TestF" {
@@ -123,8 +123,8 @@ func TestRedCIRelaunchesTheAgentOnTheSameBranch(t *testing.T) {
 	if retry.Brief != h.tasks[0].Brief {
 		t.Fatal("le brief a changé entre les tours")
 	}
-	if len(f.DraftPRs("o/a")) != 1 || p.tasks[1].PullRequest == nil {
-		t.Fatalf("PR ouvertes = %d, attendu une seule, poussée deux fois", len(f.DraftPRs("o/a")))
+	if len(f.ChangeRequests("o/a")) != 1 || p.tasks[1].ChangeRequest == nil {
+		t.Fatalf("PR ouvertes = %d, attendu une seule, poussée deux fois", len(f.ChangeRequests("o/a")))
 	}
 	i := f.Issue("o/a", 7)
 	assertNoLabel(t, i.Labels, forge.LabelInProgress, forge.LabelHuman)
@@ -147,7 +147,7 @@ func TestRedCIAfterTwoRoundsLeavesTheDraftToAHuman(t *testing.T) {
 	if len(h.tasks) != 2 {
 		t.Fatalf("l'agent a tourné %d fois : un troisième tour n'est jamais tenté", len(h.tasks))
 	}
-	pr := f.Pull("o/a", 8)
+	pr := f.Change("o/a", 8)
 	if len(pr.Comments) != 1 || !strings.Contains(pr.Comments[0], "test") || !strings.Contains(pr.Comments[0], "--- FAIL: TestF") || strings.Contains(pr.Comments[0], "lint") {
 		t.Fatalf("commentaires de la PR = %q, attendu un résumé du seul check en échec", pr.Comments)
 	}
@@ -159,7 +159,7 @@ func TestRedCIAfterTwoRoundsLeavesTheDraftToAHuman(t *testing.T) {
 	if c := lastComment(i); !strings.Contains(c, "memforge://o/a/pull/8") || !strings.Contains(c, "brouillon") {
 		t.Fatalf("commentaire final = %q", c)
 	}
-	if tr := r.Tickets[0]; tr.Outcome != pass.CIFailed || tr.PullRequest != "memforge://o/a/pull/8" {
+	if tr := r.Tickets[0]; tr.Outcome != pass.CIFailed || tr.ChangeRequest != "memforge://o/a/pull/8" {
 		t.Fatalf("rapport = %+v", tr)
 	}
 }
@@ -218,7 +218,7 @@ func TestAgentStoppingOnSecondRoundHandsTicketBackWithTheDraft(t *testing.T) {
 	if c := lastComment(i); !strings.Contains(c, "test instable") || !strings.Contains(c, "memforge://o/a/pull/8") {
 		t.Fatalf("commentaire final = %q, attendu le motif et la PR en brouillon", c)
 	}
-	if tr := r.Tickets[0]; tr.PullRequest != "memforge://o/a/pull/8" || tr.CostUSD != 0.5 {
+	if tr := r.Tickets[0]; tr.ChangeRequest != "memforge://o/a/pull/8" || tr.CostUSD != 0.5 {
 		t.Fatalf("rapport = %+v", tr)
 	}
 }
@@ -250,7 +250,7 @@ func TestLateCheckKeepsCIFromSettlingTooEarly(t *testing.T) {
 func TestRetryKeepsTheRoundToSettleIfItCannotHappen(t *testing.T) {
 	f := ciForge()
 	f.SetChecks("o/a", "head-1", red)
-	_, tasks, err := pass.Select(context.Background(), pass.Config{Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now }}, f)
+	_, tasks, err := pass.Select(context.Background(), pass.Config{Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now }}, f, f)
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("sélection : %v, %d tâche(s)", err, len(tasks))
 	}
@@ -264,10 +264,10 @@ func TestRetryKeepsTheRoundToSettleIfItCannotHappen(t *testing.T) {
 		t.Fatalf("suite = %+v, attendu une relance au tour 2", fu)
 	}
 	// Si la relance ne peut pas être préparée, ce tour se rend tel quel.
-	if fu.Result.Outcome != pass.CIFailed || fu.Result.Transcript != res.Transcript || fu.Task.Round != 1 || fu.Task.PullRequest == nil {
+	if fu.Result.Outcome != pass.CIFailed || fu.Result.Transcript != res.Transcript || fu.Task.Round != 1 || fu.Task.ChangeRequest == nil {
 		t.Fatalf("rendu de repli = %+v, tâche = %+v", fu.Result, fu.Task)
 	}
-	tr, err := pass.Settle(context.Background(), pass.Config{ID: "pass-test"}, f, fu.Task, fu.Result)
+	tr, err := pass.Settle(context.Background(), pass.Config{ID: "pass-test"}, f, f, fu.Task, fu.Result)
 	if err != nil || tr.CostUSD != 0.5 || tr.Transcript != res.Transcript {
 		t.Fatalf("rapport = %+v, %v ; attendu le coût et le transcript du seul tour", tr, err)
 	}
@@ -280,7 +280,7 @@ func TestUnfinishedRetryStillSumsUpTheRedCIOnThePR(t *testing.T) {
 
 	runRounds(t, f, h, 0)
 
-	pr := f.Pull("o/a", 8)
+	pr := f.Change("o/a", 8)
 	if len(pr.Comments) != 1 || !strings.Contains(pr.Comments[0], "--- FAIL: TestF") || !strings.Contains(pr.Comments[0], "test instable") {
 		t.Fatalf("commentaires de la PR = %q, attendu les checks en échec et le motif de la relance inaboutie", pr.Comments)
 	}
@@ -306,7 +306,7 @@ func runRefused(t *testing.T, f *memforge.Forge, h harness.Harness, refuse int) 
 	r, err := pass.Run(context.Background(), pass.Config{
 		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
 		CI: pass.CIWait{Poll: time.Millisecond, Timeout: 50 * time.Millisecond, Settle: 5 * time.Millisecond},
-	}, f, h, &refusingPublisher{forgePublisher: forgePublisher{f: f}, refuse: refuse})
+	}, f, f, h, &refusingPublisher{forgePublisher: forgePublisher{f: f}, refuse: refuse})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,10 +327,10 @@ func TestZoneRefusalHandsTheTicketBackWithoutADraft(t *testing.T) {
 	if c := lastComment(i); !strings.Contains(c, "refus de zone") || !strings.Contains(c, "`.github/workflows/e9.yml`") || !strings.Contains(c, "`.github/**`") {
 		t.Fatalf("commentaire final = %q", c)
 	}
-	if len(f.DraftPRs("o/a")) != 0 {
+	if len(f.ChangeRequests("o/a")) != 0 {
 		t.Fatal("PR ouverte malgré le refus")
 	}
-	if tr := r.Tickets[0]; tr.Outcome != pass.ZoneRefusal || tr.PullRequest != "" {
+	if tr := r.Tickets[0]; tr.Outcome != pass.ZoneRefusal || tr.ChangeRequest != "" {
 		t.Fatalf("rapport = %+v, attendu un refus de zone sans PR", tr)
 	}
 	if p := pass.ProvisionalOutcome(pass.ZoneRefusal); !strings.Contains(p, "refus de zone") || p == pass.ProvisionalOutcome(harness.Failed) {
@@ -349,10 +349,10 @@ func TestZoneRefusalOnRetryRoundLeavesTheDraftAndExplainsOnIt(t *testing.T) {
 		t.Fatalf("l'agent a tourné %d fois, attendu deux", len(h.tasks))
 	}
 	tr := r.Tickets[0]
-	if tr.Outcome != pass.ZoneRefusal || tr.PullRequest != "memforge://o/a/pull/8" {
+	if tr.Outcome != pass.ZoneRefusal || tr.ChangeRequest != "memforge://o/a/pull/8" {
 		t.Fatalf("rapport = %+v, attendu un refus de zone rattaché à la PR", tr)
 	}
-	pr := f.Pull("o/a", 8)
+	pr := f.Change("o/a", 8)
 	if len(pr.Comments) != 1 || !strings.Contains(pr.Comments[0], "refus de zone") || !strings.Contains(pr.Comments[0], "`.github/workflows/e9.yml`") {
 		t.Fatalf("commentaires de la PR = %q", pr.Comments)
 	}
@@ -364,7 +364,7 @@ func TestZoneRefusalOnRetryRoundLeavesTheDraftAndExplainsOnIt(t *testing.T) {
 func TestRetryKeepsTheOptInCommitOfTheFirstRound(t *testing.T) {
 	f := ciForge()
 	f.SetChecks("o/a", "head-1", red)
-	task := harness.Task{Ticket: forge.Ticket{Repo: "o/a", Number: 7}, Round: 1, BaseSHA: "base", OptInSHA: "base"}
+	task := harness.Task{Ticket: forge.Ticket{Repo: "o/a", Number: 7}, TargetRepo: "o/a", Round: 1, BaseSHA: "base", OptInSHA: "base"}
 	p := &forgePublisher{f: f}
 
 	fu := pass.Follow(context.Background(), pass.Config{

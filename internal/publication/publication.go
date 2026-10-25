@@ -1,6 +1,6 @@
 // Package publication est l'étape de confiance, sans modèle, qui transforme
-// la série de commits d'un agent en branche agent/ et en PR en brouillon
-// (ADR 0005). Elle repart d'un clone neuf : rien de ce que l'agent a pu
+// la série de commits d'un agent en branche agent/ et en demande de
+// changement en brouillon (ADR 0005). Elle repart d'un clone neuf : rien de ce que l'agent a pu
 // laisser dans son propre clone (hooks, configuration) n'est exécuté ici.
 package publication
 
@@ -22,31 +22,32 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/zones"
 )
 
-// Git publie par git et ouvre la PR par l'adaptateur de forge.
+// Git publie par git et ouvre la demande de changement par la forge de code
+// du dépôt cible, qui décrit aussi l'accès git.
 type Git struct {
-	Forge forge.Forge
-	// GitURL est la base des adresses de clone (https://github.com).
-	GitURL string
-	Token  string
+	Code  forge.CodeForge
+	Token string
 }
 
 // Publish implémente pass.Publisher. Au premier tour, elle crée la branche
-// agent/ sur le commit de base et ouvre la PR ; à une relance, elle ajoute
-// la série par-dessus la tête de la PR et pousse sans forcer. Avant chaque
+// agent/ sur le commit de base et ouvre la demande de changement ; à une
+// relance, elle ajoute la série par-dessus la tête de la demande et pousse
+// sans forcer. Avant chaque
 // push, elle juge chaque commit de la série contre l'adhésion du commit de
 // base du premier tour (ADR 0011) : une zone interdite touchée, ou une
 // adhésion absente ou invalide, et rien n'est poussé ; une zone sensible
-// touchée est signalée sur la PR.
+// touchée est signalée sur la demande.
 func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result) (pass.Published, error) {
 	t := task.Ticket
 	branch := Branch(t)
-	if task.PullRequest != nil {
-		branch = task.PullRequest.Branch
+	if task.ChangeRequest != nil {
+		branch = task.ChangeRequest.Branch
 		if !strings.HasPrefix(branch, "agent/") {
 			return pass.Published{}, fmt.Errorf("branche %q hors du préfixe agent/", branch)
 		}
 	}
-	remote := gitrepo.Remote{BaseURL: g.GitURL, Token: g.Token}
+	repo := task.TargetRepo
+	remote := gitrepo.Remote{GitAccess: g.Code.GitAccess(repo), Token: g.Token}
 	tmp, err := os.MkdirTemp("", "night-shift-publish-")
 	if err != nil {
 		return pass.Published{}, err
@@ -54,7 +55,7 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 	defer func() { _ = os.RemoveAll(tmp) }()
 	dir := filepath.Join(tmp, "repo")
 
-	base, head, err := remote.Clone(ctx, t.Repo, dir)
+	base, head, err := remote.Clone(ctx, dir)
 	if err != nil {
 		return pass.Published{}, err
 	}
@@ -93,7 +94,7 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 		return pass.Published{}, err
 	}
 	optInSHA := task.OptInSHA
-	if optInSHA == "" && task.PullRequest == nil {
+	if optInSHA == "" && task.ChangeRequest == nil {
 		optInSHA = head
 	}
 	flagged, err := check(ctx, remote, dir, optInSHA, head)
@@ -105,40 +106,41 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 	if _, err := remote.Git(ctx, dir, "push", "--quiet", "--no-follow-tags", "origin", ref+":"+ref); err != nil {
 		return pass.Published{}, err
 	}
-	if task.PullRequest != nil {
-		pub := pass.Published{Draft: *task.PullRequest, Head: pushed}
+	if task.ChangeRequest != nil {
+		pub := pass.Published{Draft: *task.ChangeRequest, Head: pushed}
 		if len(flagged) == 0 {
 			return pub, nil
 		}
-		if err := g.Forge.Comment(ctx, t.Repo, pub.Draft.Number, fmt.Sprintf(
+		if err := g.Code.CommentChangeRequest(ctx, repo, pub.Draft.Number, fmt.Sprintf(
 			"night-shift (passe %s) : le tour %d de l'agent touche une zone sensible, à un humain de décider.\n\n%s",
 			oneLine(task.PassID), max(task.Round, 1), mention(flagged))); err != nil {
 			return pub, err
 		}
-		return pub, g.Forge.AddLabel(ctx, t.Repo, pub.Draft.Number, forge.LabelSensitiveZone)
+		return pub, g.Code.AddChangeRequestLabel(ctx, repo, pub.Draft.Number, forge.LabelSensitiveZone)
 	}
 	// La passe efface le titre d'un ticket dont l'auteur n'est pas de
-	// confiance : la PR nomme alors le ticket.
+	// confiance : la demande nomme alors le ticket.
 	title := t.Title
 	if title == "" {
 		title = fmt.Sprintf("night-shift : ticket #%d", t.Number)
 	}
-	number, url, err := g.Forge.OpenDraftPR(ctx, t.Repo, forge.PullRequest{
-		Head:  branch,
-		Base:  base,
-		Title: title,
+	var labels []string
+	if len(flagged) > 0 {
+		labels = []string{forge.LabelSensitiveZone}
+	}
+	number, url, err := g.Code.OpenChangeRequest(ctx, repo, forge.ChangeRequest{
+		Head:   branch,
+		Base:   base,
+		Title:  title,
+		Labels: labels,
 		Body: fmt.Sprintf("Closes #%d\n\nPR ouverte en brouillon par night-shift (passe %s, agent %s). "+
 			"Elle n'est jamais passée en prête ni mergée par night-shift : à relire par un humain.%s",
 			t.Number, oneLine(task.PassID), oneLine(agent), sensitiveNote(flagged)),
 	})
-	if err != nil {
+	if url == "" {
 		return pass.Published{}, err
 	}
-	pub := pass.Published{Draft: forge.Draft{Number: number, URL: url, Branch: branch}, Head: pushed}
-	if len(flagged) > 0 {
-		return pub, g.Forge.AddLabel(ctx, t.Repo, number, forge.LabelSensitiveZone)
-	}
-	return pub, nil
+	return pass.Published{Draft: forge.Draft{Number: number, URL: url, Branch: branch}, Head: pushed}, err
 }
 
 // check juge chaque commit de base..HEAD, dans le clone dir, contre
