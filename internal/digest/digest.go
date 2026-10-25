@@ -97,6 +97,9 @@ func Body(r pass.Report, repo string, notifier bool) string {
 			cost += t.CostUSD
 		}
 		b.WriteString("\nLe détail est en commentaire de chaque ticket.\n\n")
+		if n := refusals(tickets); n > 0 {
+			fmt.Fprintf(&b, "**%d refus de zone** : la série de l'agent touchait une zone interdite, la Publication n'a rien poussé de ce tour.\n\n", n)
+		}
 	}
 	if len(retriaged) > 0 {
 		fmt.Fprintf(&b, "## Tickets sortis de la file (%d)\n\n", len(retriaged))
@@ -141,6 +144,7 @@ func Message(r pass.Report, issues []Issue, failed int) string {
 		n    int
 		what string
 	}{
+		{refusals(r.Tickets), "refus de zone"},
 		{len(r.Errors), "incident(s)"},
 		{excluded, "dépôt(s) écarté(s)"},
 		{down, "dépôt(s) injoignable(s)"},
@@ -170,6 +174,17 @@ func treated(n int) string {
 	default:
 		return fmt.Sprintf("%d tickets traités", n)
 	}
+}
+
+// refusals compte les tickets rendus sur un refus de zone.
+func refusals(ts []pass.TicketReport) int {
+	n := 0
+	for _, t := range ts {
+		if t.Outcome == pass.ZoneRefusal {
+			n++
+		}
+	}
+	return n
 }
 
 func byRepo(r pass.Report, repo string) ([]pass.TicketReport, []pass.RetriageReport) {

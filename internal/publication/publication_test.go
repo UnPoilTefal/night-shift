@@ -13,6 +13,7 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/forge/memforge"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
+	"github.com/UnPoilTefal/night-shift/internal/optin"
 	"github.com/UnPoilTefal/night-shift/internal/publication"
 	"github.com/UnPoilTefal/night-shift/internal/testgit"
 )
@@ -23,6 +24,7 @@ func fixture(t *testing.T) (*testgit.Remote, harness.Task, [][]byte) {
 	t.Helper()
 	src := testgit.New(t)
 	src.Write("README.md", "bonjour\n")
+	src.Write(optin.Path, optIn)
 	src.Commit("init")
 	remote := testgit.NewRemote(t, "o/a", src)
 	base := src.Out("rev-parse", "HEAD")
@@ -51,6 +53,7 @@ func fixture(t *testing.T) (*testgit.Remote, harness.Task, [][]byte) {
 		PassID:     "pass-42",
 		BaseBranch: "main",
 		BaseSHA:    base,
+		OptInSHA:   base,
 	}
 	return remote, task, patches
 }

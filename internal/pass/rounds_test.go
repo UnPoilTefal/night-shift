@@ -285,3 +285,94 @@ func TestUnfinishedRetryStillSumsUpTheRedCIOnThePR(t *testing.T) {
 		t.Fatalf("commentaires de la PR = %q, attendu les checks en échec et le motif de la relance inaboutie", pr.Comments)
 	}
 }
+
+// refusingPublisher publie comme forgePublisher, mais refuse le tour
+// refuse (numéroté à partir de 1) pour une zone interdite.
+type refusingPublisher struct {
+	forgePublisher
+	refuse int
+}
+
+func (p *refusingPublisher) Publish(ctx context.Context, t harness.Task, res harness.Result) (pass.Published, error) {
+	if len(p.tasks)+1 == p.refuse {
+		p.tasks = append(p.tasks, t)
+		return pass.Published{}, &pass.ZoneRefusalError{Reason: "le commit abc touche `.github/workflows/e9.yml`, dans la zone interdite `.github/**`"}
+	}
+	return p.forgePublisher.Publish(ctx, t, res)
+}
+
+func runRefused(t *testing.T, f *memforge.Forge, h harness.Harness, refuse int) pass.Report {
+	t.Helper()
+	r, err := pass.Run(context.Background(), pass.Config{
+		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
+		CI: pass.CIWait{Poll: time.Millisecond, Timeout: 50 * time.Millisecond, Settle: 5 * time.Millisecond},
+	}, f, h, &refusingPublisher{forgePublisher: forgePublisher{f: f}, refuse: refuse})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestZoneRefusalHandsTheTicketBackWithoutADraft(t *testing.T) {
+	f := ciForge()
+	h := &roundsHarness{results: []harness.Result{commits(0.5)}}
+
+	r := runRefused(t, f, h, 1)
+
+	i := f.Issue("o/a", 7)
+	if !slices.Contains(i.Labels, forge.LabelHuman) {
+		t.Fatalf("labels = %v, attendu %s", i.Labels, forge.LabelHuman)
+	}
+	assertNoLabel(t, i.Labels, forge.LabelReady, forge.LabelInProgress)
+	if c := lastComment(i); !strings.Contains(c, "refus de zone") || !strings.Contains(c, "`.github/workflows/e9.yml`") || !strings.Contains(c, "`.github/**`") {
+		t.Fatalf("commentaire final = %q", c)
+	}
+	if len(f.DraftPRs("o/a")) != 0 {
+		t.Fatal("PR ouverte malgré le refus")
+	}
+	if tr := r.Tickets[0]; tr.Outcome != pass.ZoneRefusal || tr.PullRequest != "" {
+		t.Fatalf("rapport = %+v, attendu un refus de zone sans PR", tr)
+	}
+	if p := pass.ProvisionalOutcome(pass.ZoneRefusal); !strings.Contains(p, "refus de zone") || p == pass.ProvisionalOutcome(harness.Failed) {
+		t.Fatalf("résultat provisoire = %q, attendu distinct d'une panne", p)
+	}
+}
+
+func TestZoneRefusalOnRetryRoundLeavesTheDraftAndExplainsOnIt(t *testing.T) {
+	f := ciForge()
+	f.SetChecks("o/a", "head-1", red, lint)
+	h := &roundsHarness{results: []harness.Result{commits(0.5), commits(0.25)}}
+
+	r := runRefused(t, f, h, 2)
+
+	if len(h.tasks) != 2 {
+		t.Fatalf("l'agent a tourné %d fois, attendu deux", len(h.tasks))
+	}
+	tr := r.Tickets[0]
+	if tr.Outcome != pass.ZoneRefusal || tr.PullRequest != "memforge://o/a/pull/8" {
+		t.Fatalf("rapport = %+v, attendu un refus de zone rattaché à la PR", tr)
+	}
+	pr := f.Pull("o/a", 8)
+	if len(pr.Comments) != 1 || !strings.Contains(pr.Comments[0], "refus de zone") || !strings.Contains(pr.Comments[0], "`.github/workflows/e9.yml`") {
+		t.Fatalf("commentaires de la PR = %q", pr.Comments)
+	}
+	if i := f.Issue("o/a", 7); !slices.Contains(i.Labels, forge.LabelHuman) {
+		t.Fatalf("labels = %v, attendu %s", i.Labels, forge.LabelHuman)
+	}
+}
+
+func TestRetryKeepsTheOptInCommitOfTheFirstRound(t *testing.T) {
+	f := ciForge()
+	f.SetChecks("o/a", "head-1", red)
+	task := harness.Task{Ticket: forge.Ticket{Repo: "o/a", Number: 7}, Round: 1, BaseSHA: "base", OptInSHA: "base"}
+	p := &forgePublisher{f: f}
+
+	fu := pass.Follow(context.Background(), pass.Config{
+		ID: "pass-test", Now: func() time.Time { return now },
+		CI: pass.CIWait{Poll: time.Millisecond, Timeout: 50 * time.Millisecond, Settle: 5 * time.Millisecond},
+	}, f, p, task, commits(0.5))
+
+	if !fu.Retry || fu.Next.BaseSHA != "head-1" || fu.Next.OptInSHA != "base" {
+		t.Fatalf("relance = %+v, attendu la tête publiée et le commit d'adhésion du premier tour", fu.Next)
+	}
+}

@@ -70,6 +70,21 @@ func (w CIWait) settle() time.Duration  { return cmp.Or(w.Settle, DefaultCISettl
 // la passe la prononce, jamais l'agent.
 const CIFailed harness.Outcome = "ci-failed"
 
+// ZoneRefusal est l'issue d'un ticket dont la Publication a refusé de
+// pousser la série : un commit touche une zone interdite, ou l'adhésion qui
+// la juge est absente ou invalide. Rien n'est poussé et le ticket revient à
+// un humain (ADR 0011). Seule la passe la prononce, jamais l'agent.
+const ZoneRefusal harness.Outcome = "zone-refusal"
+
+// ZoneRefusalError est l'erreur par laquelle un Publisher refuse de pousser
+// la série d'un tour. Reason dit pourquoi, pour un humain : commit, chemin
+// et zone, ou adhésion introuvable.
+type ZoneRefusalError struct {
+	Reason string
+}
+
+func (e *ZoneRefusalError) Error() string { return "refus de zone : " + e.Reason }
+
 // RepoStatus dit si un dépôt candidat a été parcouru.
 type RepoStatus string
 
@@ -126,7 +141,8 @@ type Report struct {
 }
 
 // Published est ce qu'a produit la Publication d'un tour : la PR en
-// brouillon et le commit poussé en tête de sa branche.
+// brouillon et le commit poussé en tête de sa branche. Un Publisher qui
+// échoue après avoir ouvert la PR la rend tout de même, avec son erreur.
 type Published struct {
 	Draft forge.Draft
 	Head  string
@@ -136,7 +152,8 @@ type Published struct {
 // de l'agent sur une branche agent/, la pousse et ouvre la PR en brouillon.
 // Quand la tâche porte déjà une PR (tour de relance), elle pousse sur sa
 // branche sans en ouvrir d'autre. C'est la seule étape qui écrit du code sur
-// la forge.
+// la forge : elle refuse, par un *ZoneRefusalError, de pousser une série qui
+// touche une zone interdite.
 type Publisher interface {
 	Publish(ctx context.Context, task harness.Task, res harness.Result) (Published, error)
 }
@@ -377,11 +394,18 @@ func Follow(ctx context.Context, cfg Config, f forge.Forge, p Publisher, task ha
 		return done(res)
 	}
 	pub, err := p.Publish(ctx, task, res)
-	if err != nil {
+	if pub.Draft.URL != "" {
+		task.PullRequest = &pub.Draft
+	}
+	var refusal *ZoneRefusalError
+	switch {
+	case errors.As(err, &refusal):
+		res.Outcome, res.Reason = ZoneRefusal, refusal.Reason
+		return done(res)
+	case err != nil:
 		res.Outcome, res.Reason = harness.Failed, "Publication échouée : "+err.Error()
 		return done(res)
 	}
-	task.PullRequest = &pub.Draft
 
 	checks, settled, err := waitCI(ctx, cfg.CI, f, task.Ticket.Repo, pub.Head)
 	failed := filter(checks, forge.CheckFailed)
@@ -534,6 +558,10 @@ func Settle(ctx context.Context, cfg Config, f forge.Forge, task harness.Task, r
 		label = forge.LabelNeedsInfo
 		comment = fmt.Sprintf("night-shift (passe %s) : l'agent s'est arrêté, il lui manque une information.\n\nMotif : %s%s%s",
 			cfg.ID, res.Reason, prNote, accounting(res))
+	case ZoneRefusal:
+		label = forge.LabelHuman
+		comment = fmt.Sprintf("night-shift (passe %s) : refus de zone, la Publication n'a rien poussé de ce tour et le ticket revient à un humain.\n\nMotif : %s%s%s",
+			cfg.ID, res.Reason, prNote, accounting(res))
 	case harness.Stopped:
 		label = forge.LabelHuman
 		comment = fmt.Sprintf("night-shift (passe %s) : arrêt motivé de l'agent, ticket rendu à un humain.\n\nMotif : %s%s%s",
@@ -556,7 +584,13 @@ func Settle(ctx context.Context, cfg Config, f forge.Forge, task harness.Task, r
 	if task.PullRequest != nil && len(task.CIFailures) > 0 && res.Outcome != harness.Succeeded {
 		body := fmt.Sprintf("night-shift (passe %s) : la CI échoue encore après %d tour(s) de l'agent. La PR reste en brouillon : à un humain de reprendre.\n\n%s",
 			cfg.ID, round(task), Failures(task.CIFailures))
-		if res.Outcome != CIFailed {
+		switch res.Outcome {
+		case CIFailed:
+			// Le résumé ci-dessus.
+		case ZoneRefusal:
+			body = fmt.Sprintf("night-shift (passe %s) : refus de zone au tour %d de l'agent, rien n'a été poussé sur cette PR.\n\nMotif : %s\n\nLa PR reste en brouillon, telle que le tour précédent l'a publiée : à un humain de reprendre.\n\n%s",
+				cfg.ID, round(task), res.Reason, Failures(task.CIFailures))
+		default:
 			body = fmt.Sprintf("night-shift (passe %s) : la CI de cette PR échouait, et le tour %d de l'agent n'a pas abouti : %s\n\nLa PR reste en brouillon : à un humain de reprendre.\n\n%s",
 				cfg.ID, round(task), res.Reason, Failures(task.CIFailures))
 		}
@@ -582,6 +616,8 @@ func ProvisionalOutcome(o harness.Outcome) string {
 		return "rendu en " + forge.LabelNeedsInfo + ", il manque une information"
 	case CIFailed:
 		return "CI rouge, PR en brouillon rendue à un humain (" + forge.LabelHuman + ")"
+	case ZoneRefusal:
+		return "refus de zone, rien poussé, rendu à un humain (" + forge.LabelHuman + ")"
 	default:
 		return "rendu à un humain (" + forge.LabelHuman + ")"
 	}

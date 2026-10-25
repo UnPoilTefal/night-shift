@@ -16,7 +16,7 @@ toolImage: ghcr.io/example/tools-go:1   # optional, image providing the repo's b
 trustedAuthors:                 # optional, in addition to the forge's own association (owners, members, collaborators)
   - alice
 
-forbiddenZones:                 # paths an agent PR must never modify: the zone check blocks it
+forbiddenZones:                 # paths an agent commit must never modify: Publication refuses to push it
   - ".github/**"
   - "CLAUDE.md"
 
@@ -31,11 +31,31 @@ Rules:
 - **Strict parsing.** An unknown field, a missing value or an invalid pattern makes the opt-in invalid. night-shift never guesses a perimeter.
 - **Patterns** are relative to the repository root and support `**` (see [doublestar](https://github.com/bmatcuk/doublestar)).
 - **`.night-shift/**` is always a forbidden zone**, even when not listed: an agent can neither widen its own perimeter nor rewrite the instructions for the next pass.
+- **Symbolic links** are judged by their path: a link placed inside a forbidden zone is refused, and a link outside every zone that points into one is not, since it changes no file of the zone.
 - **`go-dependencies`** zones are analysed per `go.mod`. A version bump or a removed dependency passes. A new direct requirement (including an indirect one becoming direct) or a new or changed `replace` directive is flagged. Other files in the zone (for instance `go.sum`) are not flagged.
+
+## Conditions
+
+Besides a valid opt-in, a repository needs:
+
+- a protected default branch;
+- a service identity that cannot merge (ADR 0003);
+- no workflow triggered by a push to an `agent/` branch or by an agent PR that holds write permissions or secrets. Such a workflow runs code the agent may have changed outside the forbidden zones (a `Makefile`, tests, scripts). night-shift does not verify this condition: it is an accepted risk (ADR 0011).
+
+It no longer needs to enforce required checks.
+
+## Zone refusal
+
+Publication enforces the zones itself, before every push, in both rounds (ADR 0011):
+
+- It judges **each commit** of the agent's series, not only the net diff: a commit that touches a forbidden zone is refused even if a later commit reverts it, because every pushed commit stays in the branch history and can trigger a workflow.
+- It reads the opt-in at the base commit of the **first round**, never in the series nor at the head of the PR. A missing or invalid opt-in at that commit is a refusal too.
+- A forbidden zone touched: nothing is pushed and no PR is opened. The ticket goes to `ready-for-human` with the commit, path and zone, and the digest counts the refusal apart from failures. In the retry round, the PR stays a draft, as the first round published it, with a comment.
+- A sensitive zone touched: the series is pushed, the PR names the paths and gets the `sensitive-zone` label, and a human decides.
 
 ## Zone check
 
-The zone check compares the diff of an agent PR (from the merge-base to the head) with the opt-in of the **base branch**, never the one in the PR, so a PR cannot loosen the rules that judge it.
+The same verdict is available as a check that a repository may run in its CI, as **optional defence in depth**. It compares the diff of an agent PR (from the merge-base to the head) with the opt-in of the **base branch**, never the one in the PR, so a PR cannot loosen the rules that judge it.
 
 | Verdict | Meaning | Exit code |
 |---|---|---|
@@ -44,7 +64,7 @@ The zone check compares the diff of an agent PR (from the merge-base to the head
 | `block` | A forbidden zone is touched | 1 |
 | *(error)* | Missing or invalid opt-in on the base | 1, with an explicit message |
 
-Only agent PRs, whose branch starts with `agent/`, are checked. Other PRs pass, so the check can be a required check without getting in the way of humans.
+Only agent PRs, whose branch starts with `agent/`, are checked. Other PRs pass, so the check can be a required check without getting in the way of humans. Unlike Publication, it judges the net diff of the PR.
 
 ### In GitHub Actions
 
@@ -71,7 +91,7 @@ jobs:
       - uses: UnPoilTefal/night-shift/actions/zone-check@<commit-sha>
 ```
 
-Then make **Zone check** a required status check on the default branch, and keep `.github/**` in `forbiddenZones`. A repository that cannot enforce required checks cannot opt in (ADR 0002).
+You may then make **Zone check** a required status check on the default branch; it is no longer an opt-in condition (ADR 0011). Keep `.github/**` in `forbiddenZones` either way: a workflow added by an agent would run as soon as its branch is pushed, before any check, and only Publication's refusal stops it.
 
 **Do not use `pull_request`**: with that trigger GitHub runs the workflow file from the PR itself, so an agent PR could replace the check with one that always passes. Never add a step that builds or runs the PR's code to this workflow either: under `pull_request_target`, that code would run with the base branch's privileges.
 

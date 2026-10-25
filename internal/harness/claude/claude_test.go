@@ -237,3 +237,24 @@ func TestRetryRoundHandsTheFailingChecksToTheAgentWithoutForgeToken(t *testing.T
 		t.Fatal("l'agent relancé reçoit un jeton de forge")
 	}
 }
+
+func TestForgeTokenIsRecognisedByNameOrByShape(t *testing.T) {
+	for env, want := range map[string]string{
+		"GH_TOKEN=abc":                           "GH_TOKEN",
+		"MY_SECRET=ghp_0123456789":               "MY_SECRET",
+		"CI_JOB=github_pat_11AAAA":               "CI_JOB",
+		"X=gho_x":                                "X",
+		"X=ghs_x":                                "X",
+		"X=ghu_x":                                "X",
+		"GITLAB=glpat-xyz":                       "GITLAB",
+		"PADDED= ghp_0123":                       "PADDED",
+		"CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-x": "",
+		"PATH=/usr/bin:/bin":                     "",
+		"GH_TOKEN=":                              "",
+	} {
+		got, ok := claude.ForgeToken([]string{"HOME=/home/agent", env})
+		if got != want || ok != (want != "") {
+			t.Errorf("ForgeToken(%q) = %q, %v ; attendu %q", env, got, ok, want)
+		}
+	}
+}

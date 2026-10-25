@@ -273,3 +273,19 @@ func TestNotificationSaysWhenDigestsCouldNotBeOpened(t *testing.T) {
 	}
 	assertContains(t, "notification", n.sent[0], "1 digest(s) impossible(s) à ouvrir")
 }
+
+func TestZoneRefusalsAreCountedApartFromFailures(t *testing.T) {
+	r := pass.Report{ID: "pass-test", Repos: []pass.RepoReport{{Repo: "o/a", Status: pass.Eligible}}, Tickets: []pass.TicketReport{
+		{Repo: "o/a", Number: 7, Outcome: pass.ZoneRefusal, Reason: "le commit abc touche `.github/workflows/e9.yml`"},
+		{Repo: "o/a", Number: 8, Outcome: harness.Failed},
+	}}
+
+	body := digest.Body(r, "o/a", false)
+	msg := digest.Message(r, nil, 0)
+
+	assertContains(t, "digest", body, "**1 refus de zone**", pass.ProvisionalOutcome(pass.ZoneRefusal), pass.ProvisionalOutcome(harness.Failed))
+	assertContains(t, "notification", msg, "2 tickets traités", "1 refus de zone")
+	if strings.Contains(body, "e9.yml") || strings.Contains(msg, "e9.yml") {
+		t.Fatal("le digest reprend le motif du refus, qui reste en commentaire du ticket")
+	}
+}

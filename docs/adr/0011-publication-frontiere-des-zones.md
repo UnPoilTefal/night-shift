@@ -4,6 +4,8 @@ Remplace l'ADR 0002 sur un point : les zones interdites ne sont plus protégées
 
 Le check en CI (l'action GitHub `zone-check`) reste disponible comme défense en profondeur optionnelle. Il n'est plus une condition d'adhésion, et il n'a pas d'équivalent GitLab.
 
+Statut : livré sur GitHub par #67, hors du pilote GitLab (#57), qui en hérite.
+
 ## Considered Options
 
 - **Garder le check CI requis comme frontière.** Écarté : il fait reposer le garde-fou sur un branchement correct dans chaque dépôt cible, contraire au critère « zéro miette » (ADR 0007). Sur GitLab, un pipeline de merge request exécute la configuration de la branche source, que l'agent pourrait réécrire. Les parades (pipeline execution policy, compliance pipeline) exigent une licence Premium ou Ultimate, ou une configuration externe par projet.
