@@ -19,6 +19,10 @@ const (
 	LabelTriage     = "needs-triage"
 )
 
+// LabelSensitiveZone signale une PR d'agent qui touche une zone sensible :
+// un humain décide (ADR 0011).
+const LabelSensitiveZone = "sensitive-zone"
+
 // Ticket est une issue ouverte portant le rôle ready-for-agent.
 type Ticket struct {
 	Repo   string
@@ -107,7 +111,8 @@ type Forge interface {
 	// File lit un fichier sur la branche par défaut ; ok vaut false s'il
 	// n'existe pas.
 	File(ctx context.Context, repo, path string) (data []byte, ok bool, err error)
-	// AddLabel pose un label sur un ticket.
+	// AddLabel pose un label sur un ticket ou une PR, et crée le label sur
+	// le dépôt s'il n'existe pas.
 	AddLabel(ctx context.Context, repo string, number int, label string) error
 	// RemoveLabel retire un label ; l'absence du label n'est pas une erreur.
 	RemoveLabel(ctx context.Context, repo string, number int, label string) error

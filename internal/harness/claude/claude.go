@@ -43,6 +43,30 @@ var credentialEnv = map[Auth]string{ // #nosec G101 -- noms de variables, pas de
 // n'est transmise à l'agent.
 var ForgeTokenEnv = []string{"NIGHT_SHIFT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
 
+// ForgeTokenPrefixes sont les préfixes des jetons de forge connus (GitHub,
+// GitLab) : une variable d'environnement dont la valeur en porte un est un
+// jeton, quel que soit son nom.
+var ForgeTokenPrefixes = []string{"ghp_", "github_pat_", "gho_", "ghs_", "ghu_", "glpat-"}
+
+// ForgeToken rend le nom de la première variable de env (au format
+// NOM=valeur) qui porte un jeton de forge, par son nom (ForgeTokenEnv) ou par
+// la forme de sa valeur (ForgeTokenPrefixes). Ce n'est qu'un garde-fou : un
+// jeton monté dans un fichier lui échappe, et la garantie reste le
+// déploiement (ADR 0011).
+func ForgeToken(env []string) (name string, ok bool) {
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		if v == "" {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if slices.Contains(ForgeTokenEnv, k) || slices.ContainsFunc(ForgeTokenPrefixes, func(p string) bool { return strings.HasPrefix(v, p) }) {
+			return k, true
+		}
+	}
+	return "", false
+}
+
 // PassSecretEnv liste les autres secrets de la passe, réservés aux étapes de
 // confiance : aucun n'est transmis à l'agent.
 var PassSecretEnv = []string{"NIGHT_SHIFT_DISCORD_WEBHOOK"}

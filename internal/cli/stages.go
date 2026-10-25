@@ -107,7 +107,7 @@ func prepare(ctx context.Context, d stage.Dirs, remote gitrepo.Remote, task *har
 	if err != nil {
 		return err
 	}
-	task.BaseBranch, task.BaseSHA = branch, sha
+	task.BaseBranch, task.BaseSHA, task.OptInSHA = branch, sha, sha
 	if err := os.MkdirAll(d.OutDir(), 0o755); err != nil { // #nosec G301 -- écrit par l'agent, lu par la Publication
 		return err
 	}
@@ -140,13 +140,11 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "agent : %v\n", err)
 		return 1
 	}
-	// Un jeton de forge dans l'environnement est une erreur de déploiement :
+	// Un jeton de forge dans l'environnement, reconnu à son nom ou à sa
+	// forme, est une erreur de déploiement :
 	// l'agent ne démarre pas, mais un ticket réservé reçoit tout de même un
 	// résultat, pour que la Publication le rende à un humain.
-	for _, k := range claude.ForgeTokenEnv {
-		if os.Getenv(k) == "" {
-			continue
-		}
+	if k, found := claude.ForgeToken(os.Environ()); found {
 		msg := fmt.Sprintf("la variable %s porte un jeton de forge ; le conteneur de l'agent ne doit en recevoir aucun (ADR 0005)", k)
 		_, _ = fmt.Fprintf(stderr, "agent : %s\n", msg)
 		if !ok {

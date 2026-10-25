@@ -35,6 +35,10 @@ type Task struct {
 	// BaseBranch et BaseSHA désignent le commit du dépôt cible sur lequel
 	// l'agent travaille ; la Publication y applique sa série de commits.
 	BaseBranch, BaseSHA string
+	// OptInSHA est le commit de base du premier tour : la Publication y lit
+	// l'adhésion qui juge chaque tour, jamais dans la série de l'agent ni à
+	// la tête de la PR (ADR 0011).
+	OptInSHA string
 	// Round numérote le passage de l'agent sur le ticket, à partir de 1. À
 	// partir du deuxième, l'agent repart de la PR publiée au tour précédent :
 	// BaseSHA est la tête de sa branche et CIFailures les checks qui y

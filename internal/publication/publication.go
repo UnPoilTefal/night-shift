@@ -10,12 +10,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/UnPoilTefal/night-shift/internal/forge"
+	"github.com/UnPoilTefal/night-shift/internal/gitdiff"
 	"github.com/UnPoilTefal/night-shift/internal/gitrepo"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
+	"github.com/UnPoilTefal/night-shift/internal/optin"
 	"github.com/UnPoilTefal/night-shift/internal/pass"
+	"github.com/UnPoilTefal/night-shift/internal/zones"
 )
 
 // Git publie par git et ouvre la PR par l'adaptateur de forge.
@@ -28,7 +32,11 @@ type Git struct {
 
 // Publish implémente pass.Publisher. Au premier tour, elle crée la branche
 // agent/ sur le commit de base et ouvre la PR ; à une relance, elle ajoute
-// la série par-dessus la tête de la PR et pousse sans forcer.
+// la série par-dessus la tête de la PR et pousse sans forcer. Avant chaque
+// push, elle juge chaque commit de la série contre l'adhésion du commit de
+// base du premier tour (ADR 0011) : une zone interdite touchée, ou une
+// adhésion absente ou invalide, et rien n'est poussé ; une zone sensible
+// touchée est signalée sur la PR.
 func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result) (pass.Published, error) {
 	t := task.Ticket
 	branch := Branch(t)
@@ -84,13 +92,30 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 	if err != nil {
 		return pass.Published{}, err
 	}
+	optInSHA := task.OptInSHA
+	if optInSHA == "" && task.PullRequest == nil {
+		optInSHA = head
+	}
+	flagged, err := check(ctx, remote, dir, optInSHA, head)
+	if err != nil {
+		return pass.Published{}, err
+	}
 
 	ref := "refs/heads/" + branch
 	if _, err := remote.Git(ctx, dir, "push", "--quiet", "--no-follow-tags", "origin", ref+":"+ref); err != nil {
 		return pass.Published{}, err
 	}
 	if task.PullRequest != nil {
-		return pass.Published{Draft: *task.PullRequest, Head: pushed}, nil
+		pub := pass.Published{Draft: *task.PullRequest, Head: pushed}
+		if len(flagged) == 0 {
+			return pub, nil
+		}
+		if err := g.Forge.Comment(ctx, t.Repo, pub.Draft.Number, fmt.Sprintf(
+			"night-shift (passe %s) : le tour %d de l'agent touche une zone sensible, à un humain de décider.\n\n%s",
+			oneLine(task.PassID), max(task.Round, 1), mention(flagged))); err != nil {
+			return pub, err
+		}
+		return pub, g.Forge.AddLabel(ctx, t.Repo, pub.Draft.Number, forge.LabelSensitiveZone)
 	}
 	// La passe efface le titre d'un ticket dont l'auteur n'est pas de
 	// confiance : la PR nomme alors le ticket.
@@ -103,13 +128,104 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 		Base:  base,
 		Title: title,
 		Body: fmt.Sprintf("Closes #%d\n\nPR ouverte en brouillon par night-shift (passe %s, agent %s). "+
-			"Elle n'est jamais passée en prête ni mergée par night-shift : à relire par un humain.",
-			t.Number, oneLine(task.PassID), oneLine(agent)),
+			"Elle n'est jamais passée en prête ni mergée par night-shift : à relire par un humain.%s",
+			t.Number, oneLine(task.PassID), oneLine(agent), sensitiveNote(flagged)),
 	})
 	if err != nil {
 		return pass.Published{}, err
 	}
-	return pass.Published{Draft: forge.Draft{Number: number, URL: url, Branch: branch}, Head: pushed}, nil
+	pub := pass.Published{Draft: forge.Draft{Number: number, URL: url, Branch: branch}, Head: pushed}
+	if len(flagged) > 0 {
+		return pub, g.Forge.AddLabel(ctx, t.Repo, number, forge.LabelSensitiveZone)
+	}
+	return pub, nil
+}
+
+// check juge chaque commit de base..HEAD, dans le clone dir, contre
+// l'adhésion lue au commit optInSHA. Un commit annulé par un suivant compte :
+// une fois poussé, il reste dans l'historique et peut déclencher un
+// workflow. check rend un *pass.ZoneRefusalError si un commit touche une
+// zone interdite ou si l'adhésion manque, et sinon les signalements des
+// zones sensibles.
+func check(ctx context.Context, remote gitrepo.Remote, dir, optInSHA, base string) ([]zones.Finding, error) {
+	refuse := func(format string, args ...any) ([]zones.Finding, error) {
+		return nil, &pass.ZoneRefusalError{Reason: fmt.Sprintf(format, args...)}
+	}
+	if optInSHA == "" {
+		return refuse("commit de l'adhésion de référence inconnu")
+	}
+	// Ouvert sur un seul commit, le dépôt ne sert qu'à lire l'adhésion.
+	at, err := gitdiff.Open(dir, optInSHA, optInSHA)
+	if err != nil {
+		return refuse("commit de base %s introuvable pour lire l'adhésion", optInSHA)
+	}
+	data, ok, err := at.File(optInSHA, optin.Path)
+	switch {
+	case err != nil:
+		return nil, err
+	case !ok:
+		return refuse("pas d'adhésion (%s) au commit de base %s", optin.Path, optInSHA)
+	}
+	o, err := optin.Parse(data)
+	if err != nil {
+		return refuse("adhésion (%s) invalide au commit de base %s : %v", optin.Path, optInSHA, err)
+	}
+
+	out, err := remote.Git(ctx, dir, "rev-list", "--reverse", base+"..HEAD")
+	if err != nil {
+		return nil, err
+	}
+	var flagged []zones.Finding
+	for i, c := range strings.Fields(out) {
+		repo, err := gitdiff.Open(dir, c+"^", c)
+		if err != nil {
+			return nil, err
+		}
+		changes, err := repo.Changes()
+		if err != nil {
+			return nil, err
+		}
+		report, err := zones.Check(o, changes, repo)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range report.Findings {
+			switch f.Verdict {
+			case zones.Block:
+				// Le SHA réécrit par la Publication n'existe nulle part sur la
+				// forge : le rang dans la série parle mieux à un humain.
+				return refuse("le commit %d de la série touche %s, dans la zone interdite %s", i+1, code(f.Path), code(f.Zone))
+			case zones.Flag:
+				if !slices.ContainsFunc(flagged, func(g zones.Finding) bool { return g.Path == f.Path }) {
+					flagged = append(flagged, f)
+				}
+			}
+		}
+	}
+	return flagged, nil
+}
+
+// mention liste les chemins d'une zone sensible touchés par la série.
+func mention(flagged []zones.Finding) string {
+	var b strings.Builder
+	b.WriteString("Zones sensibles touchées :\n")
+	for _, f := range flagged {
+		fmt.Fprintf(&b, "\n- %s (zone %s, %s)", code(f.Path), code(f.Zone), code(f.Reason))
+	}
+	return b.String()
+}
+
+// code rend un chemin écrit par l'agent en code Markdown sur une ligne : il
+// ne peut ni sortir du bloc ni mentionner quelqu'un.
+func code(s string) string {
+	return "`" + strings.ReplaceAll(oneLine(s), "`", "'") + "`"
+}
+
+func sensitiveNote(flagged []zones.Finding) string {
+	if len(flagged) == 0 {
+		return ""
+	}
+	return "\n\n" + mention(flagged) + "\n\nUn humain décide (label `" + forge.LabelSensitiveZone + "`)."
 }
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)

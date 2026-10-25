@@ -16,6 +16,11 @@ commit)
 fix)
 	echo z > h.txt && git add h.txt && git commit -q -m "fix: h"
 	;;
+e9)
+	# Épreuve E9 (keystone#74) : un workflow qui tournerait au push.
+	mkdir -p .github/workflows && printf 'on:\n  push:\n    branches: ["agent/**"]\n' > .github/workflows/e9.yml
+	git add .github && git commit -q -m "ci: e9"
+	;;
 needs-info)
 	printf 'la dépendance foo n est pas nommée' > "$NIGHT_SHIFT_NEEDS_INFO"
 	echo x > f.txt && git add f.txt && git commit -q -m "wip"

@@ -25,6 +25,7 @@ type Issue struct {
 type Pull struct {
 	forge.PullRequest
 	Number   int
+	Labels   []string
 	Comments []string
 }
 
@@ -115,14 +116,19 @@ func (f *Forge) AddLabel(ctx context.Context, repo string, number int, label str
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	i := f.find(repo, number)
-	if i == nil {
-		return fmt.Errorf("ticket %s#%d inconnu", repo, number)
+	if i := f.find(repo, number); i != nil {
+		if !slices.Contains(i.Labels, label) {
+			i.Labels = append(i.Labels, label)
+		}
+		return nil
 	}
-	if !slices.Contains(i.Labels, label) {
-		i.Labels = append(i.Labels, label)
+	if p := f.findPull(repo, number); p != nil {
+		if !slices.Contains(p.Labels, label) {
+			p.Labels = append(p.Labels, label)
+		}
+		return nil
 	}
-	return nil
+	return fmt.Errorf("ticket ou PR %s#%d inconnu", repo, number)
 }
 
 // RemoveLabel implémente forge.Forge.
@@ -219,6 +225,7 @@ func (f *Forge) Pull(repo string, number int) Pull {
 		panic(fmt.Sprintf("memforge : PR %s#%d inconnue", repo, number))
 	}
 	c := *p
+	c.Labels = slices.Clone(p.Labels)
 	c.Comments = slices.Clone(p.Comments)
 	return c
 }

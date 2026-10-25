@@ -42,7 +42,7 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer g.mu.Unlock()
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/repos/o/a/contents/.night-shift/opt-in.yaml":
-		_, _ = io.WriteString(w, "version: 1\ntrustLevel: {ticketsPerPass: 1, pullRequests: draft}\n")
+		_, _ = io.WriteString(w, testOptIn)
 	case r.Method == http.MethodGet && r.URL.Path == "/repos/o/a/issues":
 		if !slices.Contains(g.labels, "ready-for-agent") {
 			_, _ = io.WriteString(w, "[]")
@@ -120,12 +120,17 @@ type world struct {
 	state2, work2 string
 }
 
+// testOptIn est l'adhésion du dépôt o/a, servie par l'API et versionnée
+// dans le dépôt, où la Publication la lit.
+const testOptIn = "version: 1\ntrustLevel: {ticketsPerPass: 1, pullRequests: draft}\nforbiddenZones: [\".github/**\"]\n"
+
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	// Un webhook réel présent dans l'environnement ne doit jamais servir.
 	t.Setenv(cli.WebhookEnv, "")
 	src := testgit.New(t)
 	src.Write("README.md", "bonjour\n")
+	src.Write(".night-shift/opt-in.yaml", testOptIn)
 	src.Commit("init")
 	w := &world{
 		gh:     &fakeGitHub{labels: []string{"ready-for-agent", "prio:P2"}},
@@ -402,6 +407,25 @@ func TestSelectLeavesNoForgeTokenInTheWorkVolume(t *testing.T) {
 	}
 }
 
+func TestAgentWithATokenShapedValueUnderAnyNameNeverRuns(t *testing.T) {
+	w := newWorld(t)
+	w.selectStage(t)
+	t.Setenv(cli.TokenEnv, "")
+	t.Setenv("DEPLOY_CREDENTIAL", "github_pat_11AAAAAAA")
+	t.Setenv("FAKE_CLAUDE_LOG", w.log)
+
+	code, _, stderr := run("agent", "--claude", "/bin/false", "--state", w.state, "--work", w.work)
+
+	if code != 0 || !strings.Contains(stderr, "DEPLOY_CREDENTIAL") || strings.Contains(stderr, "github_pat_11AAAAAAA") {
+		t.Fatalf("code = %d, stderr = %q ; attendu le nom de la variable, jamais sa valeur", code, stderr)
+	}
+	t.Setenv("DEPLOY_CREDENTIAL", "")
+	w.publishStage(t)
+	if got := w.lifecycle(); !slices.Equal(got, []string{"ready-for-human"}) {
+		t.Fatalf("labels de cycle de vie = %v, attendu [ready-for-human]", got)
+	}
+}
+
 func TestAgentWithAForgeTokenNeverRunsAndTheTicketGoesToAHuman(t *testing.T) {
 	w := newWorld(t)
 	w.selectStage(t)
@@ -507,6 +531,57 @@ func TestRetryVolumesCarryNoForgeToken(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestE9WorkflowFromTheAgentIsNeverPushed(t *testing.T) {
+	w := newWorld(t)
+	mainBefore := w.remote.Out("rev-parse", "main")
+
+	w.selectStage(t)
+	w.agentStage(t, "e9")
+	stdout := w.publishStage(t)
+
+	if branches := w.remote.Out("branch", "--list", "agent/*"); branches != "" {
+		t.Fatalf("branche agent/ poussée : %q", branches)
+	}
+	if got := w.remote.Out("rev-parse", "main"); got != mainBefore {
+		t.Fatal("la branche main a bougé")
+	}
+	if len(w.gh.pulls) != 0 {
+		t.Fatalf("PR ouvertes : %v", w.gh.pulls)
+	}
+	if got := w.lifecycle(); !slices.Equal(got, []string{"ready-for-human"}) {
+		t.Fatalf("labels de cycle de vie = %v, attendu [ready-for-human]", got)
+	}
+	last := w.gh.comments[len(w.gh.comments)-1]
+	if !strings.Contains(last, "refus de zone") || !strings.Contains(last, "`.github/workflows/e9.yml`") || !strings.Contains(last, "`.github/**`") {
+		t.Fatalf("commentaire final = %q", last)
+	}
+	if !strings.Contains(stdout, "zone-refusal") || len(w.gh.digests) != 1 {
+		t.Fatalf("publish = %q, digests = %d", stdout, len(w.gh.digests))
+	}
+}
+
+func TestE9WorkflowOnTheRetryRoundLeavesTheDraftAsPublished(t *testing.T) {
+	w := newWorld(t)
+	w.gh.red = 1
+
+	w.selectStage(t)
+	w.agentStage(t, "commit")
+	w.publishStage(t, "--next-state", w.state2, "--next-work", w.work2)
+	head := w.remote.Out("rev-parse", "agent/7-ajouter-f")
+	w.agentOn(t, "e9", w.state2, w.work2)
+	w.publishStage(t, "--follow-up", "--state", w.state2, "--work", w.work2)
+
+	if got := w.remote.Out("rev-parse", "agent/7-ajouter-f"); got != head {
+		t.Fatalf("tête de la PR = %s, attendu inchangée %s", got, head)
+	}
+	if got := w.lifecycle(); !slices.Equal(got, []string{"ready-for-human"}) {
+		t.Fatalf("labels de cycle de vie = %v, attendu [ready-for-human]", got)
+	}
+	if len(w.gh.prComments) != 1 || !strings.Contains(w.gh.prComments[0], "refus de zone") {
+		t.Fatalf("commentaires de PR = %q", w.gh.prComments)
 	}
 }
 
