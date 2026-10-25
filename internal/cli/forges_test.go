@@ -48,7 +48,7 @@ func TestAgentRecognisesAForgeTokenByNameOrByShape(t *testing.T) {
 		"GH_TOKEN=":                              "",
 	} {
 		t.Run(env, func(t *testing.T) {
-			for _, k := range []string{cli.TokenEnv, "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
+			for _, k := range cli.ForgeSecretEnv() {
 				t.Setenv(k, "")
 			}
 			k, v, _ := strings.Cut(env, "=")
@@ -68,16 +68,17 @@ func TestAgentRecognisesAForgeTokenByNameOrByShape(t *testing.T) {
 }
 
 // fakeForge inscrit au registre une forge en mémoire, nommée fake, dont le
-// jeton est dans FAKE_FORGE_TOKEN et qui sert le dépôt o/a du monde w.
+// jeton est dans FAKE_FORGE_TOKEN et qui sert le dépôt o/a du monde w. Ses
+// adresses par défaut sont fake://api et les dépôts nus de w.
 func fakeForge(t *testing.T, w *world) *memforge.Forge {
 	t.Helper()
 	f := memforge.New()
 	f.GitURL = w.remote.Base
 	f.SetFile("o/a", ".night-shift/opt-in.yaml", testOptIn)
 	f.AddIssue(forge.Ticket{Repo: "o/a", Number: 7, Title: "Ajouter f", Body: "Le brief.", Author: "alice", AuthorAssociated: true, Labels: []string{forge.LabelReady}})
-	cli.AddForge(t, "fake", "FAKE_FORGE_TOKEN", func(_, _, token string) cli.Forge {
-		if token != secret {
-			t.Errorf("jeton reçu par l'adaptateur = %q", token)
+	cli.AddForge(t, "fake", "FAKE_FORGE_TOKEN", "fake://api", w.remote.Base, func(apiURL, gitURL, token string) cli.Forge {
+		if token != secret || apiURL != "fake://api" || gitURL != w.remote.Base {
+			t.Errorf("adaptateur construit avec %q, %q, %q ; attendu ses adresses par défaut et le jeton", apiURL, gitURL, token)
 		}
 		return f
 	})
