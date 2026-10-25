@@ -190,6 +190,20 @@ scan-images: ## Scan the images for secrets; fails on any finding.
 			image --scanners secret --exit-code 1 --no-progress $(IMAGE_REGISTRY)/$$img:$(IMAGE_VERSION) || exit 1; \
 	done
 
+##@ Proofs on a real forge
+
+# Dépôt sandbox (propriétaire/nom) et image éprouvés : aucun défaut, pour
+# qu'une épreuve ne vise jamais un dépôt réel par mégarde.
+E9_REPO ?=
+E9_IMAGE ?=
+
+.PHONY: e9-replay
+e9-replay: ## Replay proof E9 (keystone#74) on a sandbox: E9_REPO=owner/name E9_IMAGE=image NIGHT_SHIFT_GITHUB_TOKEN=token.
+	@[ -n "$(E9_REPO)" ] || { echo "e9-replay : E9_REPO (dépôt sandbox, propriétaire/nom) manque" >&2; exit 2; }
+	@[ -n "$(E9_IMAGE)" ] || { echo "e9-replay : E9_IMAGE (image à éprouver) manque" >&2; exit 2; }
+	@[ -n "$$NIGHT_SHIFT_GITHUB_TOKEN" ] || { echo "e9-replay : NIGHT_SHIFT_GITHUB_TOKEN (jeton de forge) manque" >&2; exit 2; }
+	CONTAINER_TOOL=$(CONTAINER_TOOL) PLATFORM=$(PLATFORM_UNDER_TEST) hack/e9-replay.sh "$(E9_REPO)" "$(E9_IMAGE)"
+
 ##@ Deployment
 
 ifndef ignore-not-found

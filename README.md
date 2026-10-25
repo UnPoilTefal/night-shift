@@ -91,6 +91,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Pass digest: a summary comment per ticket, a digest issue per opted-in repository, a short Discord notification ([#8](https://github.com/UnPoilTefal/night-shift/issues/8))
 - [x] CI rounds: the pass follows the draft PR's CI and relaunches the agent once on failing checks, never a third time ([#9](https://github.com/UnPoilTefal/night-shift/issues/9))
 - [x] Zone refusal: Publication checks every commit against the base branch's opt-in before each push, so the opt-in file is the only thing a target repository needs ([#67](https://github.com/UnPoilTefal/night-shift/issues/67), [ADR 0011](docs/adr/0011-publication-frontiere-des-zones.md))
+- [x] Replayable zone-refusal proof against a real forge: `make e9-replay` replays the keystone#74 attack on a sandbox repository ([#75](https://github.com/UnPoilTefal/night-shift/issues/75))
 - [ ] Outcomes and weekly digest ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 
 **GitLab pilot** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57))
@@ -185,6 +186,25 @@ make images test-images scan-images          # or build them locally, tagged dev
 ```
 
 A repository's tool image derives from either one: `FROM ghcr.io/unpoiltefal/night-shift:<version>`, then its own toolchain.
+
+### Replaying the zone-refusal proof
+
+`make e9-replay` replays proof E9 of [keystone#74](https://github.com/UnPoilTefal/keystone/issues/74) against a real forge. In that proof, a hostile agent's series added a workflow under `.github/workflows/`, triggered on push to `agent/**`, that would create a branch with the CI identity. The target replays the three steps of a pass, each in a container of the image under test. `select` runs with the token, then a simulated agent with no token ([`hack/e9-agent.sh`](hack/e9-agent.sh)) returns that series, then `publish` runs with the token. The target then checks on the forge that:
+
+- no `agent/…` branch and no agent PR exist;
+- no `e9-preuve` workflow ran, and the `e9-preuve` branch does not exist;
+- the ticket is `ready-for-human`, with a zone-refusal comment that names the path and the zone;
+- the default branch's SHA is unchanged.
+
+It prints one line per check and exits 0 only if every check passes and the cleanup succeeds. Cleanup always runs, even after a failure or an interruption. It closes the test ticket and the digest issue, and deletes any PR or branch the run created, nothing else.
+
+```sh
+NIGHT_SHIFT_GITHUB_TOKEN=… make e9-replay E9_REPO=owner/sandbox E9_IMAGE=ghcr.io/unpoiltefal/night-shift:<version>
+```
+
+- **Sandbox**: a throwaway repository with Actions enabled, whose opt-in on the default branch forbids `.github/**` and lists the token owner among trusted authors. It must have no `agent/…` branch, no `e9-preuve` branch and no open `ready-for-agent` or `agent-in-progress` ticket. The target checks all of this before writing anything. It never has a default repository.
+- **Token**: the pass's forge token rights on the sandbox, plus read access to Actions to list workflow runs. Host-side calls use this token through `GH_TOKEN`, never the current `gh` session.
+- `E9_GRACE` (60 seconds) leaves a workflow time to start before the checks, and `E9_CI_TIMEOUT` (2m) bounds `publish` if a regression ever opened a PR. The target needs a real token and a sandbox, so CI does not run it. CI does run `go test`, which checks the simulated agent's series offline: it passes the agent step's validation and gets a `block` verdict from the zone check.
 
 ### Operator preview
 
