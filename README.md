@@ -177,11 +177,11 @@ Two images, built from [`images/`](images/) with [`docker-bake.hcl`](docker-bake
 
 - Both run as a non-root user (UID 65532) and carry no secret: tokens and webhooks are provided at run time. They work on a read-only root filesystem once `HOME` points to a writable directory, such as an `emptyDir` on `/tmp`, as the example `CronJob` does.
 - The skills are installed as Claude Code managed skills (`/etc/claude-code/.claude/skills`), so `HOME` and `CLAUDE_CONFIG_DIR` set by the deployment never hide `/implement`.
-- Every pull request builds both images, smoke-tests them (tools, injected version, non-root user, skills) and scans them for secrets. A `vX.Y.Z` tag publishes them for `linux/amd64` and `linux/arm64`, tagged `X.Y.Z`. CI then smoke-tests and scans the pushed images on both platforms, and only then moves `latest` (never for a pre-release such as `v1.0.0-rc.1`). The first release, `v0.1.0`, is out.
+- Every pull request builds both images, smoke-tests them (tools, injected version, non-root user, skills) and scans them for secrets. A `vX.Y.Z` tag publishes them for `linux/amd64` and `linux/arm64`, tagged `X.Y.Z`. CI then smoke-tests and scans the pushed images on both platforms, and only then moves `latest` (never for a pre-release such as `v1.0.0-rc.1`). The latest release is [`v0.2.0`](https://github.com/UnPoilTefal/night-shift/releases/tag/v0.2.0).
 - Renovate tracks the base images, Claude Code, `gh` and the skills.
 
 ```sh
-docker run --rm ghcr.io/unpoiltefal/night-shift-go:0.1.0 night-shift version
+docker run --rm ghcr.io/unpoiltefal/night-shift-go:0.2.0 night-shift version
 make images test-images scan-images          # or build them locally, tagged dev
 ```
 
@@ -196,7 +196,7 @@ A repository's tool image derives from either one: `FROM ghcr.io/unpoiltefal/nig
 - the ticket is `ready-for-human`, with a zone-refusal comment that names the path and the zone;
 - the default branch's SHA is unchanged.
 
-It prints one line per check and exits 0 only if every check passes and the cleanup succeeds. Cleanup always runs, even after a failure or an interruption. It closes the test ticket and the digest issue, and deletes any PR or branch the run created, nothing else.
+It prints one line per check and exits 0 only if every check passes and the cleanup succeeds. Last replay: against the published `0.2.0` image on 2026-10-25, every check passed ([#69](https://github.com/UnPoilTefal/night-shift/issues/69)). Cleanup always runs, even after a failure or an interruption. It closes the test ticket and the digest issue, and deletes any PR or branch the run created, nothing else.
 
 ```sh
 NIGHT_SHIFT_GITHUB_TOKEN=… make e9-replay E9_REPO=owner/sandbox E9_IMAGE=ghcr.io/unpoiltefal/night-shift:<version>
