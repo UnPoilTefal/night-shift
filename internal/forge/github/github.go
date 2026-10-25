@@ -24,6 +24,13 @@ const DefaultBaseURL = "https://api.github.com"
 // DefaultGitURL est la base des adresses de clone de github.com.
 const DefaultGitURL = "https://github.com"
 
+// ToolTokenEnv sont les variables où les outils GitHub (gh, actions)
+// cherchent un jeton.
+var ToolTokenEnv = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
+
+// TokenPrefixes sont les préfixes des jetons GitHub.
+var TokenPrefixes = []string{"ghp_", "github_pat_", "gho_", "ghs_", "ghu_"}
+
 // Client implémente forge.TicketSource et forge.CodeForge pour GitHub.
 type Client struct {
 	baseURL string

@@ -35,7 +35,7 @@ func (r *repoList) Set(v string) error {
 	return nil
 }
 
-// runPass exécute une passe sur la forge choisie avec le harness factice. Code de
+// runPass exécute une passe sur la forge choisie avec le harnais factice. Code de
 // sortie : 0 si la passe s'est déroulée (même sans ticket traité), 1 en cas
 // d'erreur, 2 pour un usage incorrect.
 func runPass(args []string, stdout, stderr io.Writer) int {

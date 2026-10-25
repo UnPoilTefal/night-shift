@@ -48,24 +48,23 @@ var forges = []forgeAdapter{{
 	apiURL:        github.DefaultBaseURL,
 	gitURL:        github.DefaultGitURL,
 	tokenEnv:      TokenEnv,
-	toolEnv:       []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"},
-	tokenPrefixes: []string{"ghp_", "github_pat_", "gho_", "ghs_", "ghu_"},
+	toolEnv:       github.ToolTokenEnv,
+	tokenPrefixes: github.TokenPrefixes,
 	open:          func(apiURL, gitURL, token string) Forge { return github.New(apiURL, gitURL, token) },
 }}
 
 // otherTokenPrefixes sont les préfixes de jetons de forges qui n'ont pas
-// encore d'adaptateur : l'étape agent les refuse aussi.
+// encore d'adaptateur : l'étape agent les refuse aussi. Celui de GitLab
+// rejoindra son adaptateur.
 var otherTokenPrefixes = []string{"glpat-"}
 
 func lookupForge(name string) (forgeAdapter, error) {
-	names := make([]string, 0, len(forges))
 	for _, f := range forges {
 		if f.name == name {
 			return f, nil
 		}
-		names = append(names, f.name)
 	}
-	return forgeAdapter{}, fmt.Errorf("forge %q inconnue, forges disponibles : %s", name, strings.Join(names, ", "))
+	return forgeAdapter{}, fmt.Errorf("forge %q inconnue, forges disponibles : %s", name, forgeNames())
 }
 
 // forgeFlags porte le choix de la forge et de ses adresses ; une adresse
@@ -77,9 +76,9 @@ type forgeFlags struct {
 func addForgeFlags(fs *flag.FlagSet, withGit bool) *forgeFlags {
 	ff := &forgeFlags{}
 	fs.StringVar(&ff.name, "forge", defaultForge, "adaptateur de forge : "+forgeNames())
-	fs.StringVar(&ff.apiURL, "api-url", "", "URL de l'API de la forge (par défaut celle de l'adaptateur)")
+	fs.StringVar(&ff.apiURL, "api-url", "", "URL de l'API de la forge (par défaut, "+forgeDefaults(func(f forgeAdapter) string { return f.apiURL })+")")
 	if withGit {
-		fs.StringVar(&ff.gitURL, "git-url", "", "base des adresses de clone (par défaut celle de l'adaptateur)")
+		fs.StringVar(&ff.gitURL, "git-url", "", "base des adresses de clone (par défaut, "+forgeDefaults(func(f forgeAdapter) string { return f.gitURL })+")")
 	}
 	return ff
 }
@@ -114,6 +113,16 @@ func forgeNames() string {
 		names = append(names, f.name)
 	}
 	return strings.Join(names, ", ")
+}
+
+// forgeDefaults décrit, forge par forge, une valeur par défaut de son
+// adaptateur.
+func forgeDefaults(value func(forgeAdapter) string) string {
+	out := make([]string, 0, len(forges))
+	for _, f := range forges {
+		out = append(out, value(f)+" pour "+f.name)
+	}
+	return strings.Join(out, ", ")
 }
 
 // forgeSecretEnv rend les variables de jeton de toutes les forges du
