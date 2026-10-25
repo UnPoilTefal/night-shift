@@ -94,6 +94,11 @@ Un chemin qu'une demande de changement d'agent peut modifier, mais dont toute mo
 _FR_: zone sensible
 _Avoid_: zone surveillée, zone grise
 
+**Zone refusal**:
+Le refus, par la Publication, de pousser une série de l'agent dont un commit touche une zone interdite ; le ticket est rendu à un humain, et le refus se compte à part d'une panne.
+_FR_: refus de zone
+_Avoid_: blocage, rejet, échec de Publication
+
 **Opt-in**:
 La déclaration, versionnée dans le repo lui-même, par laquelle l'équipe propriétaire le rend éligible aux passes et en fixe le périmètre.
 _FR_: adhésion
