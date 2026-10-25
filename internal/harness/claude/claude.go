@@ -40,38 +40,6 @@ var credentialEnv = map[Auth]string{ // #nosec G101 -- noms de variables, pas de
 	APIKey:       "ANTHROPIC_API_KEY",
 }
 
-// ForgeTokenEnv liste les variables qui portent un jeton de forge : aucune
-// n'est transmise à l'agent.
-var ForgeTokenEnv = []string{"NIGHT_SHIFT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
-
-// ForgeTokenPrefixes sont les préfixes des jetons de forge connus (GitHub,
-// GitLab) : une variable d'environnement dont la valeur en porte un est un
-// jeton, quel que soit son nom.
-var ForgeTokenPrefixes = []string{"ghp_", "github_pat_", "gho_", "ghs_", "ghu_", "glpat-"}
-
-// ForgeToken rend le nom de la première variable de env (au format
-// NOM=valeur) qui porte un jeton de forge, par son nom (ForgeTokenEnv) ou par
-// la forme de sa valeur (ForgeTokenPrefixes). Ce n'est qu'un garde-fou : un
-// jeton monté dans un fichier lui échappe, et la garantie reste le
-// déploiement (ADR 0011).
-func ForgeToken(env []string) (name string, ok bool) {
-	for _, kv := range env {
-		k, v, _ := strings.Cut(kv, "=")
-		if v == "" {
-			continue
-		}
-		v = strings.TrimSpace(v)
-		if slices.Contains(ForgeTokenEnv, k) || slices.ContainsFunc(ForgeTokenPrefixes, func(p string) bool { return strings.HasPrefix(v, p) }) {
-			return k, true
-		}
-	}
-	return "", false
-}
-
-// PassSecretEnv liste les autres secrets de la passe, réservés aux étapes de
-// confiance : aucun n'est transmis à l'agent.
-var PassSecretEnv = []string{"NIGHT_SHIFT_DISCORD_WEBHOOK"}
-
 // DefaultAllowedTools sont les outils permis à l'agent quand rien d'autre
 // n'est configuré : lire et éditer le dépôt, et lancer git, go et make.
 var DefaultAllowedTools = []string{"Read", "Edit", "Write", "Glob", "Grep", "Skill", "Bash(git *)", "Bash(go *)", "Bash(make *)"}
@@ -99,9 +67,11 @@ type Claude struct {
 	// Timeout est la durée maximale du travail de l'agent.
 	Timeout time.Duration
 	// Env est l'environnement de départ (os.Environ() en production) : seul
-	// le moyen d'authentification choisi y est conservé, aucun jeton de
-	// forge n'est transmis.
+	// le moyen d'authentification choisi y est conservé.
 	Env []string
+	// Secrets sont les variables de la passe que l'agent ne reçoit jamais :
+	// jetons de forge et autres secrets des étapes de confiance.
+	Secrets []string
 }
 
 // output est la sortie JSON de claude -p --output-format json.
@@ -248,7 +218,7 @@ func (c Claude) env(id forge.Identity) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("moyen d'authentification %q inconnu, attendu %s ou %s", c.Auth, Subscription, APIKey)
 	}
-	drop := append(slices.Concat(ForgeTokenEnv, PassSecretEnv), "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
+	drop := append(slices.Clone(c.Secrets), "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
 	for _, v := range credentialEnv {
 		drop = append(drop, v)
 	}

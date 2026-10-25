@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/UnPoilTefal/night-shift/internal/forge"
-	"github.com/UnPoilTefal/night-shift/internal/forge/github"
 	"github.com/UnPoilTefal/night-shift/internal/gitrepo"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
 	"github.com/UnPoilTefal/night-shift/internal/harness/claude"
@@ -40,8 +39,7 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var repos repoList
 	fs.Var(&repos, "repo", "dépôt candidat propriétaire/nom (répétable, ou liste séparée par des virgules)")
-	apiURL := fs.String("api-url", github.DefaultBaseURL, "URL de l'API REST GitHub")
-	gitURL := fs.String("git-url", github.DefaultGitURL, "base des adresses de clone")
+	ff := addForgeFlags(fs, true)
 	d := stageFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -50,7 +48,7 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "select : au moins un --repo, --state et --work sont requis")
 		return 2
 	}
-	token, ok := forgeToken("select", stderr)
+	f, token, ok := ff.open("select", stderr)
 	if !ok {
 		return 2
 	}
@@ -59,13 +57,13 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	now := time.Now
 	cfg := pass.Config{Repos: repos, MaxTickets: 1, ID: "pass-" + now().UTC().Format("20060102T150405Z"), Now: now}
-	f := github.New(*apiURL, *gitURL, token)
 	report, tasks, err := pass.Select(ctx, cfg, f, f)
 	if err != nil {
 		report.Errors = append(report.Errors, err.Error())
 	}
 	reserved := false
 	for _, task := range tasks {
+		task.Forge = ff.name
 		perr := prepare(ctx, *d, f, token, &task)
 		if perr == nil {
 			reserved = true
@@ -147,7 +145,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	// forme, est une erreur de déploiement :
 	// l'agent ne démarre pas, mais un ticket réservé reçoit tout de même un
 	// résultat, pour que la Publication le rende à un humain.
-	if k, found := claude.ForgeToken(os.Environ()); found {
+	if k, found := forgeToken(os.Environ()); found {
 		msg := fmt.Sprintf("la variable %s porte un jeton de forge ; le conteneur de l'agent ne doit en recevoir aucun (ADR 0005)", k)
 		_, _ = fmt.Fprintf(stderr, "agent : %s\n", msg)
 		if !ok {
@@ -169,7 +167,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	h := claude.Claude{
 		Bin: *bin, Dir: d.RepoDir(), BaseSHA: task.BaseSHA, OutDir: d.OutDir(),
 		Auth: claude.Auth(*auth), AllowedTools: splitList(*tools), Skill: *skill,
-		Timeout: *timeout, Env: os.Environ(),
+		Timeout: *timeout, Env: os.Environ(), Secrets: append(forgeSecretEnv(), WebhookEnv),
 	}
 	res, err := h.Run(ctx, task)
 	if err != nil {
@@ -201,8 +199,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	ciTimeout := fs.Duration("ci-timeout", pass.DefaultCITimeout, "durée maximale de l'attente de la CI de la PR")
 	ciPoll := fs.Duration("ci-poll", pass.DefaultCIPoll, "intervalle entre deux lectures de la CI")
 	ciSettle := fs.Duration("ci-settle", pass.DefaultCISettle, "durée pendant laquelle tous les checks doivent rester terminés avant le verdict")
-	apiURL := fs.String("api-url", github.DefaultBaseURL, "URL de l'API REST GitHub")
-	gitURL := fs.String("git-url", github.DefaultGitURL, "base des adresses de clone")
+	ff := addForgeFlags(fs, true)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -210,7 +207,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "publish : --state et --work sont requis, --next-state et --next-work vont ensemble, et les durées de CI sont positives")
 		return 2
 	}
-	token, ok := forgeToken("publish", stderr)
+	f, token, ok := ff.open("publish", stderr)
 	if !ok {
 		return 2
 	}
@@ -219,9 +216,14 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "publish : %v\n", err)
 		return 1
 	}
+	// La tâche ne se publie que sur la forge qui l'a réservée : une autre ne
+	// connaît ni son ticket ni son dépôt cible.
+	if ok && taskForge(task) != ff.name {
+		_, _ = fmt.Fprintf(stderr, "publish : la tâche a été réservée sur la forge %s, publish est lancé sur la forge %s\n", taskForge(task), ff.name)
+		return 2
+	}
 	ctx, stop := signalContext()
 	defer stop()
-	f := github.New(*apiURL, *gitURL, token)
 	if !ok && *followUp {
 		_, _ = fmt.Fprintln(stdout, "aucune relance : le tour précédent a rendu le ticket")
 		return 0
@@ -300,13 +302,13 @@ func prepareRetry(ctx context.Context, d, next stage.Dirs, remote gitrepo.Remote
 	return next.WriteTask(task)
 }
 
-func forgeToken(cmd string, stderr io.Writer) (string, bool) {
-	token := os.Getenv(TokenEnv)
-	if token == "" {
-		_, _ = fmt.Fprintf(stderr, "%s : la variable %s doit porter le jeton de forge\n", cmd, TokenEnv)
-		return "", false
+// taskForge rend la forge d'une tâche ; une tâche écrite par une version
+// précédente, sans forge, vient de la forge par défaut.
+func taskForge(t harness.Task) string {
+	if t.Forge == "" {
+		return defaultForge
 	}
-	return token, true
+	return t.Forge
 }
 
 func splitList(s string) []string {

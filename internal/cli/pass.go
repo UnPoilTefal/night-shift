@@ -12,13 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/UnPoilTefal/night-shift/internal/forge/github"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
 	"github.com/UnPoilTefal/night-shift/internal/pass"
 )
-
-// TokenEnv est la variable d'environnement qui porte le jeton de forge.
-const TokenEnv = "NIGHT_SHIFT_GITHUB_TOKEN"
 
 var repoName = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
@@ -39,7 +35,7 @@ func (r *repoList) Set(v string) error {
 	return nil
 }
 
-// runPass exécute une passe sur GitHub avec le harness factice. Code de
+// runPass exécute une passe sur la forge choisie avec le harness factice. Code de
 // sortie : 0 si la passe s'est déroulée (même sans ticket traité), 1 en cas
 // d'erreur, 2 pour un usage incorrect.
 func runPass(args []string, stdout, stderr io.Writer) int {
@@ -48,7 +44,7 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 	var repos repoList
 	fs.Var(&repos, "repo", "dépôt candidat propriétaire/nom (répétable, ou liste séparée par des virgules)")
 	maxTickets := fs.Int("max-tickets", 1, "nombre maximal de tickets traités par la passe")
-	apiURL := fs.String("api-url", github.DefaultBaseURL, "URL de l'API REST GitHub")
+	ff := addForgeFlags(fs, false)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -56,9 +52,8 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "pass : au moins un --repo et --max-tickets >= 1 sont requis")
 		return 2
 	}
-	token := os.Getenv(TokenEnv)
-	if token == "" {
-		_, _ = fmt.Fprintf(stderr, "pass : la variable %s doit porter le jeton de forge\n", TokenEnv)
+	f, _, ok := ff.open("pass", stderr)
+	if !ok {
 		return 2
 	}
 
@@ -73,7 +68,6 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 	// cours sont tout de même rendus, avec un contexte de nettoyage propre.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	f := github.New(*apiURL, github.DefaultGitURL, token)
 	report, err := pass.Run(ctx, cfg, f, f, harness.Stub{}, nil)
 	printReport(stdout, report)
 	code := digestCode(ctx, f, report, stdout, stderr, "pass")
