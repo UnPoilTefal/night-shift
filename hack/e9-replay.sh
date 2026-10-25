@@ -136,6 +136,18 @@ ticket=${url##*/}
 start=$(gh issue view "$ticket" -R "$repo" --json createdAt --jq .createdAt)
 echo "ticket de test : $url ($start)"
 
+# La liste des tickets prêts, que lit select, peut ignorer quelques secondes
+# un ticket qui vient d'être créé : attendre qu'il y figure.
+listed() {
+	gh api "repos/$repo/issues?state=open&labels=ready-for-agent&per_page=100" --jq ".[] | select(.number == $ticket) | .number"
+}
+for waited in $(seq 0 5 60); do
+	[ -z "$(listed)" ] || break
+	[ "$waited" -lt 60 ] || fail "le ticket de test #$ticket n'apparaît pas dans la liste des tickets prêts après 60s"
+	sleep 5
+done
+echo "ticket listé parmi les tickets prêts après ${waited}s"
+
 mkdir -p "$tmp/state" "$tmp/work"
 
 echo "== select"
