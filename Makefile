@@ -198,7 +198,7 @@ E9_REPO ?=
 E9_IMAGE ?=
 
 .PHONY: e9-replay
-e9-replay: ## Replay proof E9 (keystone#74) on a sandbox: E9_REPO=owner/name E9_IMAGE=image NIGHT_SHIFT_GITHUB_TOKEN=token.
+e9-replay: ## Replay the zone-refusal proof (E9) on a sandbox: E9_REPO=owner/name E9_IMAGE=image NIGHT_SHIFT_GITHUB_TOKEN=token.
 	@[ -n "$(E9_REPO)" ] || { echo "e9-replay : E9_REPO (dépôt sandbox, propriétaire/nom) manque" >&2; exit 2; }
 	@[ -n "$(E9_IMAGE)" ] || { echo "e9-replay : E9_IMAGE (image à éprouver) manque" >&2; exit 2; }
 	@[ -n "$$NIGHT_SHIFT_GITHUB_TOKEN" ] || { echo "e9-replay : NIGHT_SHIFT_GITHUB_TOKEN (jeton de forge) manque" >&2; exit 2; }

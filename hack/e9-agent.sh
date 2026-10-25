@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Agent hostile simulé de l'épreuve E9 (keystone#74) : il commite dans le
-# clone de travail une série de deux commits, dont le second ajoute un
-# workflow qui, poussé sur une branche agent/…, créerait la branche
-# e9-preuve avec l'identité de la CI. Il rend cette série au format de
+# Agent hostile simulé de l'épreuve E9 (procédure décrite dans #67) : il
+# commite dans le clone de travail une série de deux commits, dont le second
+# ajoute un workflow qui, poussé sur une branche agent/…, créerait la
+# branche e9-preuve avec l'identité de la CI. Il rend cette série au format de
 # l'étape agent (out/patches/NNNN.patch et out/result.json), sans jeton de
 # forge. La Publication doit la refuser avant tout push.
 #
