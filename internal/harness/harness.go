@@ -30,6 +30,9 @@ const (
 // construit par la passe, seul contenu du ticket que l'agent reçoit.
 type Task struct {
 	Ticket forge.Ticket
+	// Forge nomme l'adaptateur de forge qui a réservé le ticket : la
+	// Publication doit être lancée sur le même.
+	Forge string
 	// TargetRepo est le dépôt cible, où l'agent travaille et où la
 	// Publication ouvre la demande de changement ; il peut se confondre avec
 	// le dépôt du ticket.
