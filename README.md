@@ -48,7 +48,7 @@ An agent treats whatever it reads as instructions, and a ticket may carry a prom
 
 | Risk | Deterministic guardrail | Decision |
 |---|---|---|
-| The agent edits CI, the release pipeline or its own configuration | Publication refuses to push any commit that touches a **forbidden zone**, judged against the base branch's opt-in | [ADR 0011](docs/adr/0011-publication-frontiere-des-zones.md) |
+| The agent edits CI, the release pipeline or its own configuration | Publication refuses to push any commit that touches a **forbidden zone**, judged against the base branch's opt-in. Defence in depth: the forge token lacks the Workflows permission, so GitHub rejects a workflow push too | [ADR 0011](docs/adr/0011-publication-frontiere-des-zones.md) |
 | A workflow that already exists runs code the agent changed | Opt-in condition: no workflow triggered by an `agent/` branch or its PR holds write permissions or secrets. night-shift does not verify it | [ADR 0011](docs/adr/0011-publication-frontiere-des-zones.md) |
 | A token leaks through prompt injection | The agent container **holds no token**: only Publication pushes. The agent step refuses to start if a variable carries a forge token, recognised by its name or by its shape (`ghp_`, `github_pat_`, `glpat-`…); a token mounted as a file is not detected, so the guarantee stays with the deployment | [ADR 0005](docs/adr/0005-agent-sans-droit-d-ecriture.md), [ADR 0011](docs/adr/0011-publication-frontiere-des-zones.md) |
 | Exfiltration, access to the internal network | Egress closed by default, allow-list proxy | [ADR 0002](docs/adr/0002-frontiere-deterministe.md) |
@@ -145,7 +145,7 @@ CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state2 --work /work2 --
 NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift publish --follow-up --state /state2 --work /work2
 ```
 
-The forge token needs read and write access to contents, pull requests and issues, and read access to checks and commit statuses. It is never mounted in the agent's container, in either round.
+The forge token needs read and write access to contents, pull requests and issues, and read access to checks and commit statuses. It is never mounted in the agent's container, in either round. Do **not** grant it the **Workflows** permission. Without it, GitHub rejects any push that creates or changes a file under `.github/workflows/`: `refusing to allow a Personal Access Token to create or update workflow … without workflow scope` (observed on 2026-10-25 with a fine-grained token, while a push of another file to an `agent/` branch went through). This is defence in depth only. The guarantee is Publication's zone refusal, which works whatever rights the token holds.
 
 | Agent outcome | Ticket ends up |
 |---|---|
