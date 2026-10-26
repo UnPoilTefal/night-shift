@@ -79,7 +79,7 @@ func TestBlockedByLinesAndNativeLinksCountOpenBlockersOnce(t *testing.T) {
 	}
 	f.srv.AddIssue("o/a", t1)
 	t7 := ready(7, "alice")
-	t7.Description = "Blocked by: #3"
+	t7.Description = "Blocked by: #3, #7"
 	f.srv.AddIssue("o/a", t7)
 
 	got := map[int]int{}
@@ -87,7 +87,8 @@ func TestBlockedByLinesAndNativeLinksCountOpenBlockersOnce(t *testing.T) {
 		got[tk.Number] = tk.OpenBlockers
 	}
 	// #1 : #2 (lien et ligne), #4 (ligne), o/autre#2 (lien) ; #3 est fermée,
-	// #5 n'existe pas, #6 n'est pas un bloqueur.
+	// #5 n'existe pas, #6 n'est pas un bloqueur. #7 ne se bloque pas
+	// lui-même.
 	if got[1] != 3 || got[7] != 0 {
 		t.Fatalf("bloqueurs ouverts = %v, attendu #1 : 3, #7 : 0", got)
 	}
@@ -133,8 +134,10 @@ func TestOpenChangeRequestIsADraftMergeRequestThatKeepsItsBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.client.OpenChangeRequest(ctx, "o/a", forge.ChangeRequest{Head: "agent/8-y", Base: "main", Title: "Draft: déjà"}); err != nil {
-		t.Fatal(err)
+	for _, title := range []string{"Draft: déjà", "[draft] déjà", "(Draft) déjà", "draft: déjà", strings.Repeat("x", 300)} {
+		if _, _, err := f.client.OpenChangeRequest(ctx, "o/a", forge.ChangeRequest{Head: "agent/8-y", Base: "main", Title: title}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	mrs := f.srv.MergeRequests("o/a")
@@ -148,8 +151,13 @@ func TestOpenChangeRequestIsADraftMergeRequestThatKeepsItsBranch(t *testing.T) {
 	if m.RemoveSourceBranch || !slices.Equal(m.Labels, []string{forge.LabelSensitiveZone}) {
 		t.Fatalf("merge request = %+v, attendu sa branche gardée et son label", m)
 	}
-	if mrs[1].Title != "Draft: déjà" {
-		t.Fatalf("titre = %q, attendu un seul préfixe", mrs[1].Title)
+	for _, m := range mrs[1:5] {
+		if !m.Draft() || strings.Count(strings.ToLower(m.Title), "draft") != 1 {
+			t.Errorf("titre = %q, attendu une seule marque de brouillon", m.Title)
+		}
+	}
+	if long := []rune(mrs[5].Title); len(long) != 255 || !mrs[5].Draft() || long[254] != '…' {
+		t.Errorf("titre long = %d caractères, attendu 255, marqué brouillon et tronqué", len(long))
 	}
 }
 
@@ -255,6 +263,9 @@ func TestChecksReadTheLatestPipelineAndTheEndOfFailedJobLogs(t *testing.T) {
 		gitlabtest.Job{Name: "e2e", Status: "running"},
 		gitlabtest.Job{Name: "docs", Status: "skipped"},
 		gitlabtest.Job{Name: "build", Status: "canceled", Trace: "court"},
+		gitlabtest.Job{Name: "minified", Status: "failed", Trace: strings.Repeat("y", 5000)},
+		gitlabtest.Job{Name: "child", Status: "failed", WebURL: "https://ci/child", Downstream: "failed"},
+		gitlabtest.Job{Name: "aval", Status: "success", Downstream: "success"},
 	)
 	f.srv.SetPipeline("o/a", "yaml", "failed")
 
@@ -269,6 +280,7 @@ func TestChecksReadTheLatestPipelineAndTheEndOfFailedJobLogs(t *testing.T) {
 	want := map[string]forge.CheckState{
 		"test": forge.CheckFailed, "lint": forge.CheckPassed, "deploy": forge.CheckPassed, "release": forge.CheckPending,
 		"e2e": forge.CheckPending, "docs": forge.CheckPassed, "build": forge.CheckFailed,
+		"minified": forge.CheckFailed, "child": forge.CheckFailed, "aval": forge.CheckPassed,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("checks = %+v", cs)
@@ -282,11 +294,17 @@ func TestChecksReadTheLatestPipelineAndTheEndOfFailedJobLogs(t *testing.T) {
 	if !strings.HasPrefix(e, "…\nligne de log\n") || !strings.HasSuffix(e, "--- FAIL: TestF\nERROR: Job failed: exit code 1") {
 		t.Errorf("extrait de test = %q", e)
 	}
-	if strings.Contains(e, "\x1b") || strings.Contains(e, "section_end") || strings.Contains(e, "début") || len([]rune(e)) > gitlab.MaxExcerpt+2 {
+	if strings.Contains(e, "\x1b") || strings.Contains(e, "section_end") || strings.Contains(e, "début") || len([]rune(e)) > gitlab.MaxExcerpt {
 		t.Errorf("extrait de test mal nettoyé ou trop long (%d caractères)", len([]rune(e)))
 	}
 	if got["test"].URL != "https://ci/1" || got["build"].Excerpt != "court" || got["lint"].Excerpt != "" {
 		t.Errorf("checks = %+v", cs)
+	}
+	if n := len([]rune(got["minified"].Excerpt)); n > gitlab.MaxExcerpt {
+		t.Errorf("extrait d'un log sans saut de ligne : %d caractères, au plus %d", n, gitlab.MaxExcerpt)
+	}
+	if e := got["child"].Excerpt; got["child"].URL != "https://ci/child" || !strings.Contains(e, "failed") || !strings.Contains(e, "/-/pipelines/") {
+		t.Errorf("job de déclenchement = %+v, attendu l'adresse de la pipeline aval", got["child"])
 	}
 
 	cs, err = f.client.Checks(context.Background(), "o/a", "yaml")
@@ -335,5 +353,62 @@ func TestTheTokenNeverAppearsInAnErrorFromTheAPIOrFromGit(t *testing.T) {
 	// git a bien présenté le jeton, en Basic avec l'utilisateur oauth2.
 	if !slices.ContainsFunc(auth, func(a string) bool { return strings.HasPrefix(a, "Basic ") }) {
 		t.Errorf("en-têtes reçus = %q, attendu une authentification de git", auth)
+	}
+}
+
+func TestChecksFallBackToTheHeadPipelineOfTheMergeRequest(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	n, _, err := f.client.OpenChangeRequest(ctx, "o/a", forge.ChangeRequest{Head: "agent/7-x", Base: "main", Title: "T"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Une pipeline de résultats fusionnés porte le commit de fusion, pas la
+	// tête de la branche.
+	f.srv.SetMergeRequestPipeline("o/a", n, "abc", "failed", gitlabtest.Job{Name: "test", Status: "failed", Trace: "--- FAIL: TestF"})
+
+	cs, err := f.client.Checks(ctx, "o/a", "abc")
+	if err != nil || len(cs) != 1 || cs[0].State != forge.CheckFailed || cs[0].Excerpt != "--- FAIL: TestF" {
+		t.Fatalf("checks = %+v, %v ; attendu la pipeline de tête de la merge request", cs, err)
+	}
+	if cs, err := f.client.Checks(ctx, "o/a", "autre"); err != nil || len(cs) != 0 {
+		t.Fatalf("commit étranger à la merge request : %+v, %v", cs, err)
+	}
+}
+
+func TestAnUnreadableLogKeepsTheFailureAndAReadLogIsNotReadAgain(t *testing.T) {
+	var traces int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch p := r.URL.EscapedPath(); p {
+		case "/projects/o%2Fa/pipelines":
+			_, _ = io.WriteString(w, `[{"id": 1, "status": "failed"}]`)
+		case "/projects/o%2Fa/pipelines/1/jobs":
+			_, _ = io.WriteString(w, `[{"id": 10, "name": "test", "status": "failed"}, {"id": 11, "name": "lint", "status": "failed"}]`)
+		case "/projects/o%2Fa/pipelines/1/bridges":
+			_, _ = io.WriteString(w, `[]`)
+		case "/projects/o%2Fa/jobs/10/trace":
+			traces++
+			_, _ = io.WriteString(w, "--- FAIL: TestF")
+		case "/projects/o%2Fa/jobs/11/trace":
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			t.Errorf("requête inattendue : %s", r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := gitlab.New(srv.URL, "https://gitlab.example", token)
+
+	for range 2 {
+		cs, err := c.Checks(context.Background(), "o/a", "abc")
+		if err != nil || len(cs) != 2 {
+			t.Fatalf("checks = %+v, %v", cs, err)
+		}
+		if cs[0].Excerpt != "--- FAIL: TestF" || cs[1].State != forge.CheckFailed || !strings.Contains(cs[1].Excerpt, "403") {
+			t.Fatalf("checks = %+v ; attendu l'échec gardé et le log illisible signalé", cs)
+		}
+	}
+	if traces != 1 {
+		t.Fatalf("log lu %d fois, attendu une seule", traces)
 	}
 }

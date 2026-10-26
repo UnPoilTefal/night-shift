@@ -87,10 +87,12 @@ func lookupForge(name string) (forgeAdapter, error) {
 // vide prend la valeur de l'adaptateur choisi.
 type forgeFlags struct {
 	name, apiURL, gitURL string
+	// withGit dit si l'étape clone ou pousse, et prend donc --git-url.
+	withGit bool
 }
 
 func addForgeFlags(fs *flag.FlagSet, withGit bool) *forgeFlags {
-	ff := &forgeFlags{}
+	ff := &forgeFlags{withGit: withGit}
 	fs.StringVar(&ff.name, "forge", defaultForge, "adaptateur de forge : "+forgeNames())
 	fs.StringVar(&ff.apiURL, "api-url", "", "URL de l'API de la forge (par défaut, "+forgeDefaults(func(f forgeAdapter) string { return f.apiURL })+")")
 	if withGit {
@@ -106,8 +108,9 @@ func repoUsage() string {
 
 // open construit l'adaptateur choisi avec le jeton de sa variable, après
 // avoir vérifié la forme des dépôts candidats. Une forge inconnue, un dépôt
-// mal formé ou un jeton absent est une erreur d'usage, signalée avant tout
-// appel réseau.
+// mal formé, une seule des deux adresses ou un jeton absent est une erreur
+// d'usage, signalée avant tout appel réseau : l'adresse de clone par défaut
+// d'une forge publique recevrait le jeton d'une autre instance.
 func (ff *forgeFlags) open(cmd string, stderr io.Writer, repos ...string) (Forge, string, bool) {
 	a, err := lookupForge(ff.name)
 	if err != nil {
@@ -119,6 +122,10 @@ func (ff *forgeFlags) open(cmd string, stderr io.Writer, repos ...string) (Forge
 			_, _ = fmt.Fprintf(stderr, "%s : forge %s : %v\n", cmd, a.name, err)
 			return nil, "", false
 		}
+	}
+	if ff.withGit && (ff.apiURL == "") != (ff.gitURL == "") {
+		_, _ = fmt.Fprintf(stderr, "%s : --api-url et --git-url désignent la même instance : les donner ensemble ou pas du tout\n", cmd)
+		return nil, "", false
 	}
 	token := os.Getenv(a.tokenEnv)
 	if token == "" {

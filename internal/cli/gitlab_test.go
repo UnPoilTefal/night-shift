@@ -185,6 +185,9 @@ func TestEachForgeChecksTheShapeOfItsRepos(t *testing.T) {
 		{"gitlab", "p", false},
 		{"gitlab", "g/../x", false},
 		{"gitlab", "g//p", false},
+		{"gitlab", "g/p.git", false},
+		{"gitlab", "g/-p", false},
+		{"gitlab", "g/.p", false},
 	} {
 		t.Run(c.forge+" "+c.repo, func(t *testing.T) {
 			// Un dépôt bien formé atteint l'API, ici injoignable : la passe

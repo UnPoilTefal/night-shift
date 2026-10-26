@@ -37,27 +37,43 @@ const DefaultGitURL = "https://gitlab.com"
 // un jeton.
 var ToolTokenEnv = []string{"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "GL_TOKEN", "CI_JOB_TOKEN"}
 
-// TokenPrefixes sont les préfixes des jetons GitLab qui donnent accès à un
-// projet : jetons d'accès personnels, de projet ou de groupe, jetons de
-// déploiement, de job CI et secrets d'application OAuth.
-var TokenPrefixes = []string{"glpat-", "gldt-", "glcbt-", "gloas-"}
+// TokenPrefixes sont les préfixes par défaut des jetons GitLab : jetons
+// d'accès personnels, de projet ou de groupe, de déploiement, de job CI, de
+// déclenchement de pipeline, de runner, d'agent Kubernetes, de flux et
+// d'e-mail entrant, et secrets d'application OAuth. Une instance peut
+// changer le préfixe de ses jetons d'accès : le garde-fou ne le connaît pas.
+var TokenPrefixes = []string{"glpat-", "gldt-", "glcbt-", "glptt-", "glrt-", "glagent-", "glft-", "glimt-", "gloas-"}
 
 // Developer est le niveau d'accès minimal d'un auteur associé.
 const Developer = 30
 
-var projectPath = regexp.MustCompile(`^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$`)
+// pathSegment est un segment de chemin que GitLab accepte : il ne commence
+// ni par un tiret ni par un point.
+var pathSegment = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 
 // ValidRepo vérifie qu'un dépôt est désigné comme GitLab l'attend : le
 // chemin complet de son projet, groupe/projet ou groupe/sous-groupe/projet.
 func ValidRepo(repo string) error {
-	if !projectPath.MatchString(repo) || strings.Contains(repo, "..") {
+	segments := strings.Split(repo, "/")
+	valid := len(segments) >= 2 && !strings.Contains(repo, "..") &&
+		!strings.HasSuffix(repo, ".git") && !strings.HasSuffix(repo, ".atom")
+	for _, s := range segments {
+		valid = valid && pathSegment.MatchString(s)
+	}
+	if !valid {
 		return fmt.Errorf("projet %q invalide, attendu groupe/projet, sous-groupes compris", repo)
 	}
 	return nil
 }
 
-// draftPrefix marque une merge request en brouillon.
+// draftPrefix marque une merge request en brouillon ; draftMarker reconnaît
+// aussi les autres marques que GitLab accepte.
 const draftPrefix = "Draft: "
+
+var draftMarker = regexp.MustCompile(`(?i)^\s*(\[draft\]|\(draft\)|draft:)`)
+
+// maxTitle est la longueur maximale, en caractères, d'un titre GitLab.
+const maxTitle = 255
 
 // Client implémente forge.TicketSource et forge.CodeForge pour GitLab.
 type Client struct {
@@ -69,6 +85,9 @@ type Client struct {
 	mu sync.Mutex
 	// labels sont les labels dont l'existence est établie, par projet.
 	labels map[string]bool
+	// traces sont les fins de log des jobs en échec déjà lues : le log d'un
+	// job terminé ne change plus, et un job relancé change d'identifiant.
+	traces map[int64]string
 }
 
 // New crée un client sur l'API baseURL (jusqu'à /api/v4 compris) ; gitURL
@@ -81,6 +100,7 @@ func New(baseURL, gitURL, token string) *Client {
 		token:   token,
 		http:    &http.Client{Timeout: 30 * time.Second},
 		labels:  map[string]bool{},
+		traces:  map[int64]string{},
 	}
 }
 
@@ -236,6 +256,9 @@ func (c *Client) openBlockers(ctx context.Context, repo string, i issue) (int, e
 		}
 	}
 	for _, n := range forge.BlockedBy(i.Description) {
+		if n == i.IID {
+			continue
+		}
 		var b issue
 		err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/issues/%d", project(repo), n), nil, &b)
 		if notFound(err) {
@@ -346,8 +369,11 @@ func (c *Client) CreateIssue(ctx context.Context, repo, title, body string) (int
 // jamais supprimée au merge. Ses labels sont posés ensuite.
 func (c *Client) OpenChangeRequest(ctx context.Context, repo string, cr forge.ChangeRequest) (int, string, error) {
 	title := cr.Title
-	if !strings.HasPrefix(title, draftPrefix) {
+	if !draftMarker.MatchString(title) {
 		title = draftPrefix + title
+	}
+	if r := []rune(title); len(r) > maxTitle {
+		title = string(r[:maxTitle-1]) + "…"
 	}
 	body := map[string]any{
 		"source_branch": cr.Head, "target_branch": cr.Base, "title": title, "description": cr.Body,
@@ -387,39 +413,34 @@ type job struct {
 	Status       string `json:"status"`
 	AllowFailure bool   `json:"allow_failure"`
 	WebURL       string `json:"web_url"`
+	// Downstream est la pipeline qu'un job de déclenchement a lancée.
+	Downstream *pipeline `json:"downstream_pipeline"`
+}
+
+type pipeline struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+	WebURL string `json:"web_url"`
 }
 
 // Checks implémente forge.CodeForge : un check par job de la pipeline la
-// plus récente du commit, avec la fin du log d'un job en échec. Une
-// pipeline sans job, comme une configuration CI invalide, est rapportée
-// comme un check à elle seule. Aucune pipeline, aucun check.
+// plus récente du commit, jobs de déclenchement de pipelines enfants ou
+// aval compris. Une pipeline sans job, comme une configuration CI invalide,
+// est rapportée comme un check à elle seule. Aucune pipeline, aucun check.
 func (c *Client) Checks(ctx context.Context, repo, sha string) ([]forge.Check, error) {
-	var pipelines []struct {
-		ID     int64  `json:"id"`
-		Status string `json:"status"`
-		WebURL string `json:"web_url"`
-	}
-	q := url.Values{"sha": {sha}, "order_by": {"id"}, "sort": {"desc"}, "per_page": {"1"}}
-	if err := c.do(ctx, http.MethodGet, project(repo)+"/pipelines?"+q.Encode(), nil, &pipelines); err != nil {
+	p, err := c.pipeline(ctx, repo, sha)
+	if err != nil || p == nil {
 		return nil, err
 	}
-	if len(pipelines) == 0 {
-		return nil, nil
+	jobs, err := c.jobs(ctx, repo, p.ID, "jobs")
+	if err != nil {
+		return nil, err
 	}
-	p := pipelines[0]
-
-	var jobs []job
-	for page := 1; ; page++ {
-		var batch []job
-		if err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/pipelines/%d/jobs?per_page=100&page=%d", project(repo), p.ID, page), nil, &batch); err != nil {
-			return nil, err
-		}
-		jobs = append(jobs, batch...)
-		if len(batch) < 100 {
-			break
-		}
+	bridges, err := c.jobs(ctx, repo, p.ID, "bridges")
+	if err != nil {
+		return nil, err
 	}
-	if len(jobs) == 0 {
+	if len(jobs)+len(bridges) == 0 {
 		ch := forge.Check{Name: "pipeline", State: jobState(p.Status, false), URL: p.WebURL}
 		if ch.State == forge.CheckFailed {
 			ch.Excerpt = "pipeline " + p.Status + " sans job : configuration CI invalide ?"
@@ -427,18 +448,73 @@ func (c *Client) Checks(ctx context.Context, repo, sha string) ([]forge.Check, e
 		return []forge.Check{ch}, nil
 	}
 	var out []forge.Check
-	for _, j := range jobs {
-		ch := forge.Check{Name: j.Name, State: jobState(j.Status, j.AllowFailure), URL: j.WebURL}
-		if ch.State == forge.CheckFailed {
-			tail, err := c.trace(ctx, repo, j.ID)
-			if err != nil {
-				return nil, err
-			}
-			ch.Excerpt = tail
+	for _, j := range append(jobs, bridges...) {
+		out = append(out, forge.Check{Name: j.Name, State: jobState(j.Status, j.AllowFailure), URL: j.WebURL})
+	}
+	for i, j := range jobs {
+		if out[i].State == forge.CheckFailed {
+			out[i].Excerpt = c.trace(ctx, repo, j.ID)
 		}
-		out = append(out, ch)
+	}
+	for i, b := range bridges {
+		if ch := &out[len(jobs)+i]; ch.State == forge.CheckFailed && b.Downstream != nil {
+			ch.Excerpt = fmt.Sprintf("pipeline aval %s : %s", b.Downstream.Status, b.Downstream.WebURL)
+		}
 	}
 	return out, nil
+}
+
+// pipeline rend la pipeline la plus récente du commit sha. À défaut, c'est
+// la pipeline de tête d'une merge request dont sha est la tête : une
+// pipeline de résultats fusionnés porte le commit de fusion, pas sha.
+func (c *Client) pipeline(ctx context.Context, repo, sha string) (*pipeline, error) {
+	var ps []pipeline
+	q := url.Values{"sha": {sha}, "order_by": {"id"}, "sort": {"desc"}, "per_page": {"1"}}
+	if err := c.do(ctx, http.MethodGet, project(repo)+"/pipelines?"+q.Encode(), nil, &ps); err != nil {
+		return nil, err
+	}
+	if len(ps) > 0 {
+		return &ps[0], nil
+	}
+	var mrs []struct {
+		IID int    `json:"iid"`
+		SHA string `json:"sha"`
+	}
+	err := c.do(ctx, http.MethodGet, project(repo)+"/repository/commits/"+url.PathEscape(sha)+"/merge_requests", nil, &mrs)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range mrs {
+		if m.SHA != sha {
+			continue
+		}
+		var mr struct {
+			HeadPipeline *pipeline `json:"head_pipeline"`
+		}
+		if err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/merge_requests/%d", project(repo), m.IID), nil, &mr); err != nil {
+			return nil, err
+		}
+		if mr.HeadPipeline != nil {
+			return mr.HeadPipeline, nil
+		}
+	}
+	return nil, nil
+}
+
+// jobs lit les jobs (kind « jobs ») ou les jobs de déclenchement (kind
+// « bridges ») d'une pipeline.
+func (c *Client) jobs(ctx context.Context, repo string, id int64, kind string) ([]job, error) {
+	var out []job
+	for page := 1; ; page++ {
+		var batch []job
+		if err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/pipelines/%d/%s?per_page=100&page=%d", project(repo), id, kind, page), nil, &batch); err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if len(batch) < 100 {
+			return out, nil
+		}
+	}
 }
 
 // jobState traduit l'état d'un job ou d'une pipeline. Un job autorisé à
@@ -462,25 +538,36 @@ func jobState(status string, allowFailure bool) forge.CheckState {
 }
 
 // trace rend la fin du log d'un job, nettoyée de ses séquences de terminal
-// et tronquée à MaxExcerpt caractères au début d'une ligne.
-func (c *Client) trace(ctx context.Context, repo string, id int64) (string, error) {
+// et tronquée à MaxExcerpt caractères au début d'une ligne. Un log illisible
+// ne cache pas l'échec du job : l'extrait le dit, et le log sera relu.
+func (c *Client) trace(ctx context.Context, repo string, id int64) string {
+	c.mu.Lock()
+	cached, ok := c.traces[id]
+	c.mu.Unlock()
+	if ok {
+		return cached
+	}
 	req, err := c.request(ctx, http.MethodGet, fmt.Sprintf("%s/jobs/%d/trace", project(repo), id), nil)
 	if err != nil {
-		return "", err
+		return "log illisible"
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", c.scrub(err)
+		return "log illisible : " + c.scrub(err).Error()
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return "", c.statusError(req, resp)
+		return "log illisible : " + c.statusError(req, resp).Error()
 	}
 	var t tail
 	if _, err := io.Copy(&t, resp.Body); err != nil {
-		return "", c.scrub(err)
+		return "log illisible : " + c.scrub(err).Error()
 	}
-	return logTail(string(t.buf), t.cut), nil
+	excerpt := logTail(string(t.buf), t.cut)
+	c.mu.Lock()
+	c.traces[id] = excerpt
+	c.mu.Unlock()
+	return excerpt
 }
 
 // tail garde les maxTrace derniers octets écrits.
@@ -518,8 +605,9 @@ func logTail(log string, cut bool) string {
 	if len(r) <= MaxExcerpt && !cut {
 		return text
 	}
-	if len(r) > MaxExcerpt {
-		text = string(r[len(r)-MaxExcerpt:])
+	// L'extrait tronqué garde la place de sa marque « …\n ».
+	if len(r) > MaxExcerpt-2 {
+		text = string(r[len(r)-(MaxExcerpt-2):])
 		if i := strings.IndexByte(text, '\n'); i >= 0 {
 			text = text[i+1:]
 		}
