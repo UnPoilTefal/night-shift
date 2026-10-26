@@ -165,7 +165,7 @@ func (w *world) agentStage(t *testing.T, mode string) {
 // agentOn fait tourner l'étape de l'agent sur les volumes donnés.
 func (w *world) agentOn(t *testing.T, mode, state, work string) {
 	t.Helper()
-	for _, k := range []string{cli.TokenEnv, "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
+	for _, k := range cli.ForgeSecretEnv() {
 		t.Setenv(k, "")
 	}
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-secret")
