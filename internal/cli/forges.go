@@ -10,6 +10,7 @@ import (
 
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/forge/github"
+	"github.com/UnPoilTefal/night-shift/internal/forge/gitlab"
 )
 
 // Forge est ce qu'un adaptateur de forge fournit aux étapes : la source de
@@ -32,7 +33,11 @@ type forgeAdapter struct {
 	// l'étape agent refuse les unes comme les autres.
 	toolEnv       []string
 	tokenPrefixes []string
-	open          func(apiURL, gitURL, token string) Forge
+	// repoForm décrit la forme d'un dépôt sur cette forge, et validRepo la
+	// vérifie.
+	repoForm  string
+	validRepo func(repo string) error
+	open      func(apiURL, gitURL, token string) Forge
 }
 
 // defaultForge est la forge sans --forge, et celle d'une tâche écrite par une
@@ -43,6 +48,10 @@ const defaultForge = "github"
 // par défaut.
 const TokenEnv = "NIGHT_SHIFT_GITHUB_TOKEN"
 
+// GitLabTokenEnv est la variable d'environnement qui porte le jeton de la
+// forge gitlab.
+const GitLabTokenEnv = "NIGHT_SHIFT_GITLAB_TOKEN"
+
 var forges = []forgeAdapter{{
 	name:          defaultForge,
 	apiURL:        github.DefaultBaseURL,
@@ -50,13 +59,20 @@ var forges = []forgeAdapter{{
 	tokenEnv:      TokenEnv,
 	toolEnv:       github.ToolTokenEnv,
 	tokenPrefixes: github.TokenPrefixes,
+	repoForm:      "propriétaire/nom",
+	validRepo:     github.ValidRepo,
 	open:          func(apiURL, gitURL, token string) Forge { return github.New(apiURL, gitURL, token) },
+}, {
+	name:          "gitlab",
+	apiURL:        gitlab.DefaultBaseURL,
+	gitURL:        gitlab.DefaultGitURL,
+	tokenEnv:      GitLabTokenEnv,
+	toolEnv:       gitlab.ToolTokenEnv,
+	tokenPrefixes: gitlab.TokenPrefixes,
+	repoForm:      "groupe/projet, sous-groupes compris,",
+	validRepo:     gitlab.ValidRepo,
+	open:          func(apiURL, gitURL, token string) Forge { return gitlab.New(apiURL, gitURL, token) },
 }}
-
-// otherTokenPrefixes sont les préfixes de jetons de forges qui n'ont pas
-// encore d'adaptateur : l'étape agent les refuse aussi. Celui de GitLab
-// rejoindra son adaptateur.
-var otherTokenPrefixes = []string{"glpat-"}
 
 func lookupForge(name string) (forgeAdapter, error) {
 	for _, f := range forges {
@@ -83,14 +99,26 @@ func addForgeFlags(fs *flag.FlagSet, withGit bool) *forgeFlags {
 	return ff
 }
 
-// open construit l'adaptateur choisi avec le jeton de sa variable. Une forge
-// inconnue ou un jeton absent est une erreur d'usage, signalée avant tout
+// repoUsage décrit --repo, dont la forme dépend de la forge.
+func repoUsage() string {
+	return "dépôt candidat : " + forgeDefaults(func(f forgeAdapter) string { return f.repoForm }) + " (répétable, ou liste séparée par des virgules)"
+}
+
+// open construit l'adaptateur choisi avec le jeton de sa variable, après
+// avoir vérifié la forme des dépôts candidats. Une forge inconnue, un dépôt
+// mal formé ou un jeton absent est une erreur d'usage, signalée avant tout
 // appel réseau.
-func (ff *forgeFlags) open(cmd string, stderr io.Writer) (Forge, string, bool) {
+func (ff *forgeFlags) open(cmd string, stderr io.Writer, repos ...string) (Forge, string, bool) {
 	a, err := lookupForge(ff.name)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "%s : %v\n", cmd, err)
 		return nil, "", false
+	}
+	for _, r := range repos {
+		if err := a.validRepo(r); err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s : forge %s : %v\n", cmd, a.name, err)
+			return nil, "", false
+		}
 	}
 	token := os.Getenv(a.tokenEnv)
 	if token == "" {
@@ -142,7 +170,7 @@ func forgeSecretEnv() []string {
 // déploiement (ADR 0011).
 func forgeToken(env []string) (name string, ok bool) {
 	names := forgeSecretEnv()
-	prefixes := slices.Clone(otherTokenPrefixes)
+	var prefixes []string
 	for _, f := range forges {
 		prefixes = append(prefixes, f.tokenPrefixes...)
 	}

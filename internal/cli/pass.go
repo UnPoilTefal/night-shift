@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -16,21 +15,17 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/pass"
 )
 
-var repoName = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
-
+// repoList porte les dépôts candidats ; leur forme est celle qu'attend la
+// forge choisie, et son adaptateur la vérifie (forgeFlags.open).
 type repoList []string
 
 func (r *repoList) String() string { return strings.Join(*r, ",") }
 
 func (r *repoList) Set(v string) error {
 	for _, s := range strings.Split(v, ",") {
-		if s = strings.TrimSpace(s); s == "" {
-			continue
+		if s = strings.TrimSpace(s); s != "" {
+			*r = append(*r, s)
 		}
-		if !repoName.MatchString(s) || strings.Contains(s, "..") {
-			return fmt.Errorf("dépôt %q invalide, attendu propriétaire/nom", s)
-		}
-		*r = append(*r, s)
 	}
 	return nil
 }
@@ -42,7 +37,7 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("pass", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var repos repoList
-	fs.Var(&repos, "repo", "dépôt candidat propriétaire/nom (répétable, ou liste séparée par des virgules)")
+	fs.Var(&repos, "repo", repoUsage())
 	maxTickets := fs.Int("max-tickets", 1, "nombre maximal de tickets traités par la passe")
 	ff := addForgeFlags(fs, false)
 	if err := fs.Parse(args); err != nil {
@@ -52,7 +47,7 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "pass : au moins un --repo et --max-tickets >= 1 sont requis")
 		return 2
 	}
-	f, _, ok := ff.open("pass", stderr)
+	f, _, ok := ff.open("pass", stderr, repos...)
 	if !ok {
 		return 2
 	}

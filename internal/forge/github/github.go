@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,6 +31,17 @@ var ToolTokenEnv = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "
 
 // TokenPrefixes sont les préfixes des jetons GitHub.
 var TokenPrefixes = []string{"ghp_", "github_pat_", "gho_", "ghs_", "ghu_"}
+
+var repoName = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+// ValidRepo vérifie qu'un dépôt est désigné comme GitHub l'attend :
+// propriétaire/nom.
+func ValidRepo(repo string) error {
+	if !repoName.MatchString(repo) || strings.Contains(repo, "..") {
+		return fmt.Errorf("dépôt %q invalide, attendu propriétaire/nom", repo)
+	}
+	return nil
+}
 
 // Client implémente forge.TicketSource et forge.CodeForge pour GitHub.
 type Client struct {

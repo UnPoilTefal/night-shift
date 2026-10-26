@@ -38,7 +38,7 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("select", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var repos repoList
-	fs.Var(&repos, "repo", "dépôt candidat propriétaire/nom (répétable, ou liste séparée par des virgules)")
+	fs.Var(&repos, "repo", repoUsage())
 	ff := addForgeFlags(fs, true)
 	d := stageFlags(fs)
 	if err := fs.Parse(args); err != nil {
@@ -48,7 +48,7 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "select : au moins un --repo, --state et --work sont requis")
 		return 2
 	}
-	f, token, ok := ff.open("select", stderr)
+	f, token, ok := ff.open("select", stderr, repos...)
 	if !ok {
 		return 2
 	}

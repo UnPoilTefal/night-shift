@@ -10,7 +10,10 @@ import (
 func AddForge(t testing.TB, name, tokenEnv, apiURL, gitURL string, open func(apiURL, gitURL, token string) Forge) {
 	t.Helper()
 	previous := forges
-	forges = append(slices.Clone(forges), forgeAdapter{name: name, tokenEnv: tokenEnv, apiURL: apiURL, gitURL: gitURL, open: open})
+	forges = append(slices.Clone(forges), forgeAdapter{
+		name: name, tokenEnv: tokenEnv, apiURL: apiURL, gitURL: gitURL, open: open,
+		repoForm: "propriétaire/nom", validRepo: func(string) error { return nil },
+	})
 	t.Cleanup(func() { forges = previous })
 }
 

@@ -7,6 +7,9 @@ package forge
 
 import (
 	"context"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -36,11 +39,36 @@ type Ticket struct {
 	AuthorAssociated bool
 	Labels           []string
 	CreatedAt        time.Time
-	// OpenBlockers compte les dépendances natives encore ouvertes.
+	// OpenBlockers compte les tickets bloquants encore ouverts : les
+	// dépendances natives de l'outil et, quand il n'en a pas partout, les
+	// tickets que nomme une ligne « Blocked by » du corps (BlockedBy).
 	OpenBlockers int
 	// Comments sont les commentaires du ticket, du plus ancien au plus
 	// récent, quel que soit leur auteur : la passe seule les filtre.
 	Comments []Comment
+}
+
+// blockedByLine est une ligne « Blocked by: #n[, #n] » d'un corps de ticket.
+var blockedByLine = regexp.MustCompile(`(?im)^[ \t]*blocked by:[ \t]*(#\d+(?:[ \t]*,[ \t]*#\d+)*)[ \t\r]*$`)
+
+var ticketRef = regexp.MustCompile(`#(\d+)`)
+
+// BlockedBy rend les numéros des tickets du même dépôt que nomment les lignes
+// « Blocked by: #n[, #n] » d'un corps, sans doublon. C'est le repli du
+// contrat pour une source de tickets dont les liens de blocage natifs
+// manquent, ou manquent sur certaines éditions (ADR 0012) : son adaptateur
+// compte ces tickets dans OpenBlockers tant qu'ils sont ouverts.
+func BlockedBy(body string) []int {
+	var out []int
+	for _, line := range blockedByLine.FindAllStringSubmatch(body, -1) {
+		for _, ref := range ticketRef.FindAllStringSubmatch(line[1], -1) {
+			n, err := strconv.Atoi(ref[1])
+			if err == nil && n > 0 && !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
+	}
+	return out
 }
 
 // Comment est un commentaire d'un ticket.
