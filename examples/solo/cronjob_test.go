@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/UnPoilTefal/night-shift/internal/cli"
 )
 
 type envVar struct {
@@ -65,9 +67,13 @@ type cronJob struct {
 	} `yaml:"spec"`
 }
 
-func load(t *testing.T) cronJob {
+// examples sont les variantes de l'exemple, une par forge : chaque test les
+// juge toutes.
+var examples = []string{"cronjob.yaml", "cronjob-gitlab.yaml"}
+
+func load(t *testing.T, path string) cronJob {
 	t.Helper()
-	b, err := os.ReadFile("cronjob.yaml")
+	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,13 +84,20 @@ func load(t *testing.T) cronJob {
 	return cj
 }
 
+// eachExample joue test sur chaque variante de l'exemple.
+func eachExample(t *testing.T, test func(t *testing.T, cj cronJob)) {
+	for _, ex := range examples {
+		t.Run(ex, func(t *testing.T) { test(t, load(t, ex)) })
+	}
+}
+
 // forgeSecrets rend les secrets d'où les étapes de confiance tirent le jeton
-// de forge.
+// de forge, quelle que soit la forge.
 func forgeSecrets(cs []container) []string {
 	var out []string
 	for _, c := range cs {
 		for _, e := range c.Env {
-			if e.Name == "NIGHT_SHIFT_GITHUB_TOKEN" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+			if slices.Contains(cli.ForgeSecretEnv(), e.Name) && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
 				out = append(out, e.ValueFrom.SecretKeyRef.Name)
 			}
 		}
@@ -97,103 +110,109 @@ func forgeSecrets(cs []container) []string {
 var stages = []string{"select", "agent", "publish", "retry-agent", "retry-publish"}
 
 func TestAgentContainersReceiveNoForgeToken(t *testing.T) {
-	spec := load(t).Spec.JobTemplate.Spec.Template.Spec
-	all := append(slices.Clone(spec.InitContainers), spec.Containers...)
-	var names []string
-	for _, c := range all {
-		names = append(names, c.Name)
-	}
-	if !slices.Equal(names, stages) || len(spec.Containers) != 1 {
-		t.Fatalf("conteneurs = %v, attendu les initContainers puis le conteneur %v", names, stages)
-	}
-	secrets := forgeSecrets(all)
-	if len(secrets) == 0 {
-		t.Fatal("aucun secret de forge trouvé pour select et publish")
-	}
-	secretVolumes := map[string]bool{}
-	for _, v := range spec.Volumes {
-		if (v.Secret != nil && slices.Contains(secrets, v.Secret.SecretName)) || v.Projected != nil {
-			secretVolumes[v.Name] = true
+	eachExample(t, func(t *testing.T, cj cronJob) {
+		spec := cj.Spec.JobTemplate.Spec.Template.Spec
+		all := append(slices.Clone(spec.InitContainers), spec.Containers...)
+		var names []string
+		for _, c := range all {
+			names = append(names, c.Name)
 		}
-	}
+		if !slices.Equal(names, stages) || len(spec.Containers) != 1 {
+			t.Fatalf("conteneurs = %v, attendu les initContainers puis le conteneur %v", names, stages)
+		}
+		secrets := forgeSecrets(all)
+		if len(secrets) == 0 {
+			t.Fatal("aucun secret de forge trouvé pour select et publish")
+		}
+		secretVolumes := map[string]bool{}
+		for _, v := range spec.Volumes {
+			if (v.Secret != nil && slices.Contains(secrets, v.Secret.SecretName)) || v.Projected != nil {
+				secretVolumes[v.Name] = true
+			}
+		}
 
-	if len(all) != len(stages) {
-		return
-	}
-	for _, agent := range []container{all[1], all[3]} {
-		for _, e := range agent.Env {
-			if slices.Contains([]string{"NIGHT_SHIFT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "NIGHT_SHIFT_DISCORD_WEBHOOK"}, e.Name) {
-				t.Errorf("%s reçoit la variable %s", agent.Name, e.Name)
+		if len(all) != len(stages) {
+			return
+		}
+		for _, agent := range []container{all[1], all[3]} {
+			for _, e := range agent.Env {
+				if slices.Contains(append(cli.ForgeSecretEnv(), cli.WebhookEnv), e.Name) {
+					t.Errorf("%s reçoit la variable %s", agent.Name, e.Name)
+				}
+				if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && slices.Contains(secrets, e.ValueFrom.SecretKeyRef.Name) {
+					t.Errorf("%s lit le secret de forge %s", agent.Name, e.ValueFrom.SecretKeyRef.Name)
+				}
 			}
-			if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && slices.Contains(secrets, e.ValueFrom.SecretKeyRef.Name) {
-				t.Errorf("%s lit le secret de forge %s", agent.Name, e.ValueFrom.SecretKeyRef.Name)
+			for _, ef := range agent.EnvFrom {
+				if ef.SecretRef != nil && slices.Contains(secrets, ef.SecretRef.Name) {
+					t.Errorf("%s importe le secret de forge %s", agent.Name, ef.SecretRef.Name)
+				}
+			}
+			for _, m := range agent.VolumeMounts {
+				if secretVolumes[m.Name] {
+					t.Errorf("%s monte le volume %s, qui porte un secret", agent.Name, m.Name)
+				}
 			}
 		}
-		for _, ef := range agent.EnvFrom {
-			if ef.SecretRef != nil && slices.Contains(secrets, ef.SecretRef.Name) {
-				t.Errorf("%s importe le secret de forge %s", agent.Name, ef.SecretRef.Name)
-			}
+		if spec.AutomountServiceAccountToken == nil || *spec.AutomountServiceAccountToken {
+			t.Error("le jeton de compte de service doit rester hors du pod")
 		}
-		for _, m := range agent.VolumeMounts {
-			if secretVolumes[m.Name] {
-				t.Errorf("%s monte le volume %s, qui porte un secret", agent.Name, m.Name)
-			}
-		}
-	}
-	if spec.AutomountServiceAccountToken == nil || *spec.AutomountServiceAccountToken {
-		t.Error("le jeton de compte de service doit rester hors du pod")
-	}
+	})
 }
 
 func TestEachTaskIsWrittenByATrustedStageAndReadOnlyForTheAgent(t *testing.T) {
-	spec := load(t).Spec.JobTemplate.Spec.Template.Spec
-	mounts := map[string]map[string]bool{}
-	for _, c := range append(slices.Clone(spec.InitContainers), spec.Containers...) {
-		ro := map[string]bool{}
-		for _, m := range c.VolumeMounts {
-			ro[m.Name] = m.ReadOnly
+	eachExample(t, func(t *testing.T, cj cronJob) {
+		spec := cj.Spec.JobTemplate.Spec.Template.Spec
+		mounts := map[string]map[string]bool{}
+		for _, c := range append(slices.Clone(spec.InitContainers), spec.Containers...) {
+			ro := map[string]bool{}
+			for _, m := range c.VolumeMounts {
+				ro[m.Name] = m.ReadOnly
+			}
+			mounts[c.Name] = ro
 		}
-		mounts[c.Name] = ro
-	}
-	// nom du conteneur → volume → lecture seule attendue.
-	want := map[string]map[string]bool{
-		"select":        {"state": false, "work": false},
-		"agent":         {"state": true, "work": false},
-		"publish":       {"state": true, "work": true, "state2": false, "work2": false},
-		"retry-agent":   {"state2": true, "work2": false},
-		"retry-publish": {"state2": true, "work2": true},
-	}
-	for name, vols := range want {
-		for v, ro := range vols {
-			got, ok := mounts[name][v]
-			if !ok || got != ro {
-				t.Errorf("%s : volume %s monté = %t, lecture seule = %t ; attendu monté en lecture seule = %t", name, v, ok, got, ro)
+		// nom du conteneur → volume → lecture seule attendue.
+		want := map[string]map[string]bool{
+			"select":        {"state": false, "work": false},
+			"agent":         {"state": true, "work": false},
+			"publish":       {"state": true, "work": true, "state2": false, "work2": false},
+			"retry-agent":   {"state2": true, "work2": false},
+			"retry-publish": {"state2": true, "work2": true},
+		}
+		for name, vols := range want {
+			for v, ro := range vols {
+				got, ok := mounts[name][v]
+				if !ok || got != ro {
+					t.Errorf("%s : volume %s monté = %t, lecture seule = %t ; attendu monté en lecture seule = %t", name, v, ok, got, ro)
+				}
 			}
 		}
-	}
-	for _, v := range []string{"state", "work"} {
-		if _, ok := mounts["retry-agent"][v]; ok {
-			t.Errorf("l'agent relancé monte %s, le volume du premier tour", v)
+		for _, v := range []string{"state", "work"} {
+			if _, ok := mounts["retry-agent"][v]; ok {
+				t.Errorf("l'agent relancé monte %s, le volume du premier tour", v)
+			}
 		}
-	}
-	if load(t).Spec.ConcurrencyPolicy != "Forbid" {
-		t.Fatal("une seule passe active à la fois : concurrencyPolicy Forbid attendu")
-	}
+		if cj.Spec.ConcurrencyPolicy != "Forbid" {
+			t.Fatal("une seule passe active à la fois : concurrencyPolicy Forbid attendu")
+		}
+	})
 }
 
 func TestStageVolumeFlagsPointAtTheirMounts(t *testing.T) {
-	spec := load(t).Spec.JobTemplate.Spec.Template.Spec
-	for _, c := range append(slices.Clone(spec.InitContainers), spec.Containers...) {
-		paths := map[string]bool{}
-		for _, m := range c.VolumeMounts {
-			paths[m.MountPath] = true
-		}
-		for _, f := range []string{"--state", "--work", "--next-state", "--next-work"} {
-			if p := flagValue(c.Args, f); p != "" && !paths[p] {
-				t.Errorf("%s : %s %s ne correspond à aucun montage", c.Name, f, p)
+	eachExample(t, func(t *testing.T, cj cronJob) {
+		spec := cj.Spec.JobTemplate.Spec.Template.Spec
+		for _, c := range append(slices.Clone(spec.InitContainers), spec.Containers...) {
+			paths := map[string]bool{}
+			for _, m := range c.VolumeMounts {
+				paths[m.MountPath] = true
+			}
+			for _, f := range []string{"--state", "--work", "--next-state", "--next-work"} {
+				if p := flagValue(c.Args, f); p != "" && !paths[p] {
+					t.Errorf("%s : %s %s ne correspond à aucun montage", c.Name, f, p)
+				}
 			}
 		}
-	}
+	})
 }
 
 // flagValue rend la valeur d'un drapeau dans des arguments.
@@ -207,65 +226,103 @@ func flagValue(args []string, name string) string {
 }
 
 func TestStagesChainTheRetryAndFitTheDeadline(t *testing.T) {
-	cj := load(t)
-	spec := cj.Spec.JobTemplate.Spec.Template.Spec
-	all := append(slices.Clone(spec.InitContainers), spec.Containers...)
-	if len(all) != len(stages) {
-		t.Fatalf("%d conteneurs, attendu %v", len(all), stages)
-	}
-	publish, retry := all[2].Args, all[4].Args
-	if flagValue(publish, "--next-state") == "" || flagValue(publish, "--next-work") == "" || !slices.Contains(retry, "--follow-up") {
-		t.Fatalf("publish %q, retry-publish %q : attendu la préparation puis la Publication de la relance", publish, retry)
-	}
-	var total time.Duration
-	for _, c := range []struct {
-		args []string
-		flag string
-	}{{all[1].Args, "--timeout"}, {publish, "--ci-timeout"}, {all[3].Args, "--timeout"}, {retry, "--ci-timeout"}} {
-		d, err := time.ParseDuration(flagValue(c.args, c.flag))
-		if err != nil {
-			t.Fatalf("%q : %s illisible : %v", c.args, c.flag, err)
+	eachExample(t, func(t *testing.T, cj cronJob) {
+		spec := cj.Spec.JobTemplate.Spec.Template.Spec
+		all := append(slices.Clone(spec.InitContainers), spec.Containers...)
+		if len(all) != len(stages) {
+			t.Fatalf("%d conteneurs, attendu %v", len(all), stages)
 		}
-		total += d
-	}
-	// Chaque étape garde quelques minutes pour cloner, pousser et rendre le
-	// ticket avant l'échéance du pod.
-	if deadline := time.Duration(cj.Spec.JobTemplate.Spec.ActiveDeadlineSeconds) * time.Second; deadline < total+5*time.Minute {
-		t.Fatalf("activeDeadlineSeconds = %s, attendu au moins %s (agents et attentes de CI, plus une marge)", deadline, total+5*time.Minute)
-	}
+		publish, retry := all[2].Args, all[4].Args
+		if flagValue(publish, "--next-state") == "" || flagValue(publish, "--next-work") == "" || !slices.Contains(retry, "--follow-up") {
+			t.Fatalf("publish %q, retry-publish %q : attendu la préparation puis la Publication de la relance", publish, retry)
+		}
+		var total time.Duration
+		for _, c := range []struct {
+			args []string
+			flag string
+		}{{all[1].Args, "--timeout"}, {publish, "--ci-timeout"}, {all[3].Args, "--timeout"}, {retry, "--ci-timeout"}} {
+			d, err := time.ParseDuration(flagValue(c.args, c.flag))
+			if err != nil {
+				t.Fatalf("%q : %s illisible : %v", c.args, c.flag, err)
+			}
+			total += d
+		}
+		// Chaque étape garde quelques minutes pour cloner, pousser et rendre le
+		// ticket avant l'échéance du pod.
+		if deadline := time.Duration(cj.Spec.JobTemplate.Spec.ActiveDeadlineSeconds) * time.Second; deadline < total+5*time.Minute {
+			t.Fatalf("activeDeadlineSeconds = %s, attendu au moins %s (agents et attentes de CI, plus une marge)", deadline, total+5*time.Minute)
+		}
+	})
 }
 
 func TestEveryStageRunsNightShiftFromThePublishedImages(t *testing.T) {
-	spec := load(t).Spec.JobTemplate.Spec.Template.Spec
-	images := map[string]string{
-		"select":        "ghcr.io/unpoiltefal/night-shift:",
-		"agent":         "ghcr.io/unpoiltefal/night-shift-go:",
-		"publish":       "ghcr.io/unpoiltefal/night-shift:",
-		"retry-agent":   "ghcr.io/unpoiltefal/night-shift-go:",
-		"retry-publish": "ghcr.io/unpoiltefal/night-shift:",
-	}
-	for _, c := range append(slices.Clone(spec.InitContainers), spec.Containers...) {
-		// Les images n'ont pas d'ENTRYPOINT : la commande doit être explicite.
-		cmd := strings.TrimPrefix(c.Name, "retry-")
-		if !slices.Equal(c.Command, []string{"night-shift"}) || len(c.Args) == 0 || c.Args[0] != cmd {
-			t.Errorf("%s : command %q, args %q ; attendu night-shift %s …", c.Name, c.Command, c.Args, cmd)
+	eachExample(t, func(t *testing.T, cj cronJob) {
+		spec := cj.Spec.JobTemplate.Spec.Template.Spec
+		images := map[string]string{
+			"select":        "ghcr.io/unpoiltefal/night-shift:",
+			"agent":         "ghcr.io/unpoiltefal/night-shift-go:",
+			"publish":       "ghcr.io/unpoiltefal/night-shift:",
+			"retry-agent":   "ghcr.io/unpoiltefal/night-shift-go:",
+			"retry-publish": "ghcr.io/unpoiltefal/night-shift:",
 		}
-		if want, ok := images[c.Name]; !ok || !strings.HasPrefix(c.Image, want) {
-			t.Errorf("%s : image %q, attendu %s<version>", c.Name, c.Image, images[c.Name])
+		for _, c := range append(slices.Clone(spec.InitContainers), spec.Containers...) {
+			// Les images n'ont pas d'ENTRYPOINT : la commande doit être explicite.
+			cmd := strings.TrimPrefix(c.Name, "retry-")
+			if !slices.Equal(c.Command, []string{"night-shift"}) || len(c.Args) == 0 || c.Args[0] != cmd {
+				t.Errorf("%s : command %q, args %q ; attendu night-shift %s …", c.Name, c.Command, c.Args, cmd)
+			}
+			if want, ok := images[c.Name]; !ok || !strings.HasPrefix(c.Image, want) {
+				t.Errorf("%s : image %q, attendu %s<version>", c.Name, c.Image, images[c.Name])
+			}
 		}
-	}
+	})
 }
 
 func TestRecentPassesStayInspectableInTheCluster(t *testing.T) {
-	spec := load(t).Spec
-	// Le détail d'une passe ne vit que dans les logs de ses pods : sans
-	// historique, Kubernetes ne garde qu'un seul Job échoué.
-	for name, limit := range map[string]*int{
-		"successfulJobsHistoryLimit": spec.SuccessfulJobsHistoryLimit,
-		"failedJobsHistoryLimit":     spec.FailedJobsHistoryLimit,
-	} {
-		if limit == nil || *limit < 7 {
-			t.Errorf("%s = %v, attendu au moins une semaine de passes (7)", name, limit)
+	eachExample(t, func(t *testing.T, cj cronJob) {
+		spec := cj.Spec
+		// Le détail d'une passe ne vit que dans les logs de ses pods : sans
+		// historique, Kubernetes ne garde qu'un seul Job échoué.
+		for name, limit := range map[string]*int{
+			"successfulJobsHistoryLimit": spec.SuccessfulJobsHistoryLimit,
+			"failedJobsHistoryLimit":     spec.FailedJobsHistoryLimit,
+		} {
+			if limit == nil || *limit < 7 {
+				t.Errorf("%s = %v, attendu au moins une semaine de passes (7)", name, limit)
+			}
 		}
-	}
+	})
+}
+
+func TestTrustedStagesShareOneForgeOneInstanceAndItsToken(t *testing.T) {
+	eachExample(t, func(t *testing.T, cj cronJob) {
+		spec := cj.Spec.JobTemplate.Spec.Template.Spec
+		all := append(slices.Clone(spec.InitContainers), spec.Containers...)
+		type target struct{ forge, instance, token string }
+		var seen []target
+		for _, c := range all {
+			if strings.HasSuffix(c.Name, "agent") {
+				if flagValue(c.Args, "--forge") != "" || flagValue(c.Args, "--instance") != "" {
+					t.Errorf("%s : l'étape agent ne parle à aucune forge, attendu ni --forge ni --instance", c.Name)
+				}
+				continue
+			}
+			tg := target{forge: flagValue(c.Args, "--forge"), instance: flagValue(c.Args, "--instance")}
+			for _, e := range c.Env {
+				if slices.Contains(cli.ForgeSecretEnv(), e.Name) {
+					tg.token = e.Name
+				}
+			}
+			seen = append(seen, tg)
+		}
+		// publish refuse une tâche réservée sur une autre forge : les trois
+		// étapes de confiance visent la même.
+		if len(seen) != 3 || seen[1] != seen[0] || seen[2] != seen[0] {
+			t.Fatalf("étapes de confiance = %+v, attendu la même forge, la même instance et le même jeton", seen)
+		}
+		want := map[string]string{"": cli.TokenEnv, "github": cli.TokenEnv, "gitlab": cli.GitLabTokenEnv}[seen[0].forge]
+		if want == "" || seen[0].token != want {
+			t.Fatalf("forge %q avec le jeton %q, attendu %q", seen[0].forge, seen[0].token, want)
+		}
+	})
 }

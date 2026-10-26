@@ -1,6 +1,6 @@
 # night-shift
 
-**Your ready tickets move forward overnight. In the morning, you review draft PRs instead of babysitting agents.**
+**Your ready tickets move forward overnight. In the morning, you review draft pull or merge requests instead of babysitting agents.**
 
 [![CI](https://github.com/UnPoilTefal/night-shift/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/UnPoilTefal/night-shift/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/UnPoilTefal/night-shift/badge)](https://scorecard.dev/viewer/?uri=github.com/UnPoilTefal/night-shift)
@@ -12,7 +12,7 @@
 [![Decisions](https://img.shields.io/badge/decisions-ADR-blue)](docs/adr/)
 [![Glossary](https://img.shields.io/badge/glossary-GLOSSARY.md-blue)](GLOSSARY.md)
 
-night-shift runs scheduled **passes** of AI coding agents over the **ready tickets** in an issue tracker: issues labelled `ready-for-agent` and carrying a self-contained agent brief. Each pass reserves a capped number of tickets and hands each one to a headless agent, locked in a container that has no privileges. It produces exactly two things: **draft PRs** and a **digest** for human review.
+night-shift runs scheduled **passes** of AI coding agents over the **ready tickets** in an issue tracker: issues labelled `ready-for-agent` and carrying a self-contained agent brief. Each pass reserves a capped number of tickets and hands each one to a headless agent, locked in a container that has no privileges. It produces exactly two things: **draft change requests** (pull requests on GitHub, merge requests on GitLab) and a **digest** for human review.
 
 This project does not bet on the model behaving. **Everything the agent must not do is enforced by a deterministic mechanism.**
 
@@ -29,7 +29,7 @@ flowchart LR
         S -- "filtered brief" --> A
         A -- "commit series<br/>(format-patch)" --> U
     end
-    PR["📝 Draft PR<br/><code>sensitive-zone</code> label<br/>when one is touched"]
+    PR["📝 Draft PR / MR<br/><code>sensitive-zone</code> label<br/>when one is touched"]
     R["🛑 Zone refusal<br/>nothing pushed<br/><code>ready-for-human</code>"]
     H["👤 Human review<br/>+ digest"]
     T --> S
@@ -42,7 +42,21 @@ flowchart LR
 3. **Publication**: a step with no model involved. It applies the series, checks the zones (below), pushes an `agent/…` branch with an attribution trailer and opens a **draft** PR. It never merges and never pushes a tag. It then follows the PR's CI: if checks fail, the pass relaunches the agent **once**, in a fresh container on a fresh clone of the published branch, with the names and excerpts of the failing checks. There is never a third round.
 4. **Zones**: before every push, in both rounds, Publication judges **each commit** of the series against the opt-in of the base branch, never the one in the series. If a single commit touches a **forbidden zone** (CI, release pipeline, agent configuration), nothing is pushed: this is a **zone refusal**, and the ticket goes back to a human. This holds even when a later commit reverts the change, because every pushed commit stays in the branch history and can trigger a workflow. A **sensitive zone** (dependencies, for instance) is pushed, and the PR names the paths and gets the `sensitive-zone` label, so that a human decides.
 
-**Tools behind contracts.** night-shift never talks to a tool directly. The pass, Publication and the digest only know four contracts: **ticket source**, **code forge**, **harness** and notification. Each tool plugs in through its own **adapter**: GitHub for the forge, Claude Code for the harness, Discord for notifications. Supporting GitLab, another forge or Jira means writing an adapter that passes the shared **contract test suite**, without touching the pass ([ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md)). The steps pick their forge adapter with `--forge`, from a registry kept in the CLI: adding a forge means adding one entry there. Two forge adapters exist, **GitHub** and **GitLab**. Each one serves both the ticket source and the code forge contracts, and both pass the same contract suite as the in-memory fake (`internal/forge/forgetest`). The pass, Publication and the digest did not change when GitLab arrived. The contracts speak of change requests, never pull requests. Each forge's git user, noreply commit identities and project naming stay inside its adapter. Comments and digests still say "PR" for now.
+**Tools behind contracts.** night-shift never talks to a tool directly. The pass, Publication and the digest only know four contracts: **ticket source**, **code forge**, **harness** and notification ([ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md)). Each tool plugs in through its own **adapter**:
+
+| Contract | Adapters today |
+|---|---|
+| Ticket source and code forge | **GitHub** (github.com and Enterprise Server), **GitLab** (gitlab.com, dedicated and self-managed: see [the GitLab guide](docs/gitlab.md)) |
+| Harness | Claude Code (`claude -p`) |
+| Notification | Discord |
+
+GitHub and GitLab are two adapters among others possible, and the steps choose one with `--forge`. Both pass the same contract test suite as the in-memory fake, and the pass, Publication and the digest did not change when GitLab arrived. The contracts speak of change requests, never pull requests. Each forge's git user, commit identities, project naming and address rules stay inside its adapter. Comments and digests still say "PR" for now.
+
+**Adding a forge** (or a ticket source such as Jira) never touches the pass:
+
+1. Implement `forge.TicketSource` and `forge.CodeForge` in `internal/forge/<name>` ([`internal/forge/forge.go`](internal/forge/forge.go)). A capability the tool lacks gets the fallback the contract defines, such as the `Blocked by: #n` line for blocking links.
+2. Run the shared contract suite against it, through a fixture over a simulated API: `forgetest.Run(t, newFixture)` ([`internal/forge/forgetest`](internal/forge/forgetest)). No scenario may be removed or weakened.
+3. Add one entry to the forge registry ([`internal/cli/forges.go`](internal/cli/forges.go)): its name, public addresses and how `--instance` derives them, the token variable, the tool variables and token prefixes that the agent step refuses, and the shape of a repository.
 
 ## Security principles
 
@@ -102,7 +116,8 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Ticket source and code forge as two separate contracts, with one contract test suite for every adapter ([#80](https://github.com/UnPoilTefal/night-shift/issues/80))
 - [x] Choose the forge adapter of a pass with an option ([#81](https://github.com/UnPoilTefal/night-shift/issues/81))
 - [x] GitLab adapter, the first one added: issues as a ticket source, draft merge requests, pipelines for CI rounds, gitlab.com or a self-managed instance ([#82](https://github.com/UnPoilTefal/night-shift/issues/82))
-- [ ] GitLab deployment example, guides and a run on a real instance ([#83](https://github.com/UnPoilTefal/night-shift/issues/83))
+- [x] GitLab deployment example, installation guide, opt-in guidance and a zone-refusal proof that replays on either forge ([#83](https://github.com/UnPoilTefal/night-shift/issues/83))
+- [ ] A pass on a real GitLab instance, run by the maintainer ([#57](https://github.com/UnPoilTefal/night-shift/issues/57))
 
 **Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
 
@@ -184,7 +199,7 @@ Each ticket gets a summary comment: what was done, cost, duration and its provis
 - **Incidents**: if part of the pass fails (a reservation, a clone), `select` records it instead of exiting, so the pod still reaches publication. The digest counts the incidents without their details, then `publish` exits with an error so that the job shows the failure.
 - **Discord notification** (optional): it holds only counters (tickets, zone refusals, triage, incidents, repositories left out or unreachable) and links to the digest issues; it never names a repository left out, never carries an error message or ticket content, and mentions nobody. The egress proxy must let `publish` reach `discord.com`. Without a webhook, the pass still succeeds and the digest says the notification is not configured. If the webhook fails, the digest issues get a comment saying so.
 
-[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment: a `CronJob` whose pod runs `select`, `agent`, `publish` and `retry-agent` as init containers and `retry-publish` as its container, with the forge token and the Discord webhook mounted only in the trusted steps. Its deadline (90 minutes) covers two agent rounds of 30 minutes and two CI waits of 10 minutes. A test in the repository keeps it that way. The egress proxy and transcript retention belong to your deployment. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
+[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment, and [`cronjob-gitlab.yaml`](examples/solo/cronjob-gitlab.yaml) the same on GitLab ([guide](docs/gitlab.md)): a `CronJob` whose pod runs `select`, `agent`, `publish` and `retry-agent` as init containers and `retry-publish` as its container, with the forge token and the Discord webhook mounted only in the trusted steps. Its deadline (90 minutes) covers two agent rounds of 30 minutes and two CI waits of 10 minutes. A test in the repository keeps both variants that way, and fails if a forge token reaches an agent step. The egress proxy and transcript retention belong to your deployment. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
 
 ### Container images
 
@@ -209,21 +224,25 @@ A repository's tool image derives from either one: `FROM ghcr.io/unpoiltefal/nig
 
 ### Replaying the zone-refusal proof
 
-`make e9-replay` replays proof E9 against a real forge, following the procedure in [#67](https://github.com/UnPoilTefal/night-shift/issues/67). In that proof, a hostile agent's series added a workflow under `.github/workflows/`, triggered on push to `agent/**`, that would create a branch with the CI identity. The target replays the three steps of a pass, each in a container of the image under test. `select` runs with the token, then a simulated agent with no token ([`hack/e9-agent.sh`](hack/e9-agent.sh)) returns that series, then `publish` runs with the token. The target then checks on the forge that:
+`make e9-replay` replays proof E9 against a real forge, following the procedure in [#67](https://github.com/UnPoilTefal/night-shift/issues/67). In that proof, a hostile agent's series added a workflow under `.github/workflows/`, triggered on push to `agent/**`, that would create a branch with the CI identity. The target replays the three steps of a pass, each in a container of the image under test. `select` runs with the token, then a simulated agent with no token ([`hack/e9-agent.sh`](hack/e9-agent.sh)) returns that series, then `publish` runs with the token. On GitLab (`E9_FORGE=gitlab`), the series rewrites `.gitlab-ci.yml` instead. The target then checks on the forge that:
 
-- no `agent/…` branch and no agent PR exist;
-- no `e9-preuve` workflow ran, and the `e9-preuve` branch does not exist;
+- no `agent/…` branch and no agent change request exist;
+- no CI ran for the trap (the `e9-preuve` workflow on GitHub, any pipeline on an `agent/…` branch on GitLab), and the `e9-preuve` branch does not exist;
 - the ticket is `ready-for-human`, with a zone-refusal comment that names the path and the zone;
 - the default branch's SHA is unchanged.
 
-It prints one line per check and exits 0 only if every check passes and the cleanup succeeds. Last replay: against the published `0.2.0` image on 2026-10-25, every check passed ([#69](https://github.com/UnPoilTefal/night-shift/issues/69)). Cleanup always runs, even after a failure or an interruption. It closes the test ticket and the digest issue, and deletes any PR or branch the run created, nothing else.
+It prints one line per check and exits 0 only if every check passes and the cleanup succeeds. Last replay on GitHub: against the published `0.2.0` image on 2026-10-25, every check passed ([#69](https://github.com/UnPoilTefal/night-shift/issues/69)). It has not been replayed on GitLab yet. Cleanup always runs, even after a failure or an interruption. It closes the test ticket and the digest issue, and deletes any PR or branch the run created, nothing else.
 
 ```sh
 NIGHT_SHIFT_GITHUB_TOKEN=… make e9-replay E9_REPO=owner/sandbox E9_IMAGE=ghcr.io/unpoiltefal/night-shift:<version>
+NIGHT_SHIFT_GITLAB_TOKEN=… make e9-replay E9_FORGE=gitlab E9_INSTANCE=https://gitlab.example.com \
+  E9_REPO=group/sandbox E9_IMAGE=ghcr.io/unpoiltefal/night-shift:<version>
 ```
 
-- **Sandbox**: a throwaway repository with Actions enabled, whose opt-in on the default branch forbids `.github/**` and lists the token owner among trusted authors. It must have no `agent/…` branch, no `e9-preuve` branch and no open `ready-for-agent` or `agent-in-progress` ticket. The target checks all of this before writing anything. It never has a default repository.
-- **Token**: the pass's forge token rights on the sandbox, plus read access to Actions to list workflow runs. Host-side calls use this token through `GH_TOKEN`, never the current `gh` session.
+Every host-side call to the forge goes through one small driver per forge behind a common interface: [`hack/e9-forge-github.sh`](hack/e9-forge-github.sh) (`gh`) and [`hack/e9-forge-gitlab.sh`](hack/e9-forge-gitlab.sh) (`curl` and `jq`). Without `E9_FORGE`, the target behaves as before on GitHub.
+
+- **Sandbox**: a throwaway repository with CI enabled, whose opt-in on the default branch forbids `.github/**` (GitHub) or `.gitlab-ci.yml` (GitLab), and whose token account is a trusted author: listed in the opt-in on GitHub, Developer of the project or listed on GitLab. It must have no `agent/…` branch, no `e9-preuve` branch and no open `ready-for-agent` or `agent-in-progress` ticket. The target checks all of this before writing anything. It never has a default repository.
+- **Token**: the pass's forge token rights on the sandbox, plus read access to Actions on GitHub to list workflow runs. Host-side calls use this token, never the current `gh` session; on GitLab it goes through a header file, never on `curl`'s command line.
 - `E9_GRACE` (60 seconds) leaves a workflow time to start before the checks, and `E9_CI_TIMEOUT` (2m) bounds `publish` if a regression ever opened a PR. The target needs a real token and a sandbox, so CI does not run it. CI does run `go test`, which checks the simulated agent's series offline: it passes the agent step's validation and gets a `block` verdict from the zone check.
 
 ### Operator preview
