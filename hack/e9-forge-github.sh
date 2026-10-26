@@ -16,7 +16,7 @@ forge_setup() {
 	# l'identité de la session gh courante.
 	export GH_TOKEN=$NIGHT_SHIFT_GITHUB_TOKEN
 	if [ -n "${E9_INSTANCE:-}" ]; then
-		GH_HOST=$(sed -E 's|^https?://([^/:]+).*|\1|' <<<"$E9_INSTANCE")
+		GH_HOST=$(sed -E 's|^https?://([^/]+).*|\1|' <<<"$E9_INSTANCE")
 		export GH_HOST GH_ENTERPRISE_TOKEN=$NIGHT_SHIFT_GITHUB_TOKEN
 	fi
 }
@@ -69,9 +69,18 @@ forge_trap_runs_since() {
 
 forge_ticket_labels() { gh issue view "$1" -R "$repo" --json labels --jq '[.labels[].name] | join(",")'; }
 
+# forge_refusal_count <ticket> <extrait…> : nombre de commentaires du ticket
+# qui contiennent tous les extraits. gh --jq ne prend pas d'argument : les
+# extraits entrent tels quels dans le filtre, d'où le refus des guillemets et
+# des barres obliques inverses.
 forge_refusal_count() {
-	gh issue view "$1" -R "$repo" --json comments \
-		--jq "[.comments[].body | select(contains(\"$FORGE_TRAP_PATH\") and contains(\"$FORGE_TRAP_ZONE\"))] | length"
+	local n=$1 filter='true' x
+	shift
+	for x in "$@"; do
+		[[ $x != *[\"\\]* ]] || fail "extrait inutilisable dans un filtre gh : $x"
+		filter+=" and contains(\"$x\")"
+	done
+	gh issue view "$n" -R "$repo" --json comments --jq "[.comments[].body | select($filter)] | length"
 }
 
 # forge_close_agent_change_requests <ticket> : ferme les demandes de
