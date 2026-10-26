@@ -412,3 +412,15 @@ func TestAnUnreadableLogKeepsTheFailureAndAReadLogIsNotReadAgain(t *testing.T) {
 		t.Fatalf("log lu %d fois, attendu une seule", traces)
 	}
 }
+
+func TestAnInstanceServesItsAPIAndItsClonesFromOneBase(t *testing.T) {
+	for base, want := range map[string][2]string{
+		"https://gitlab.corp.example":         {"https://gitlab.corp.example/api/v4", "https://gitlab.corp.example"},
+		"https://corp.example/gitlab/":        {"https://corp.example/gitlab/api/v4", "https://corp.example/gitlab"},
+		"http://127.0.0.1:8080/relative/root": {"http://127.0.0.1:8080/relative/root/api/v4", "http://127.0.0.1:8080/relative/root"},
+	} {
+		if api, git := gitlab.Instance(base); api != want[0] || git != want[1] {
+			t.Errorf("Instance(%q) = %q, %q ; attendu %q", base, api, git, want)
+		}
+	}
+}

@@ -33,6 +33,14 @@ const DefaultBaseURL = "https://gitlab.com/api/v4"
 // DefaultGitURL est la base des adresses de clone de gitlab.com.
 const DefaultGitURL = "https://gitlab.com"
 
+// Instance rend les adresses de l'API et des clones d'une instance GitLab
+// auto-hébergée ou dédiée servie à base, chemin relatif compris
+// (https://exemple.org/gitlab).
+func Instance(base string) (apiURL, gitURL string) {
+	base = strings.TrimSuffix(base, "/")
+	return base + "/api/v4", base
+}
+
 // ToolTokenEnv sont les variables où les outils GitLab (glab, CI) cherchent
 // un jeton.
 var ToolTokenEnv = []string{"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "GL_TOKEN", "CI_JOB_TOKEN"}
