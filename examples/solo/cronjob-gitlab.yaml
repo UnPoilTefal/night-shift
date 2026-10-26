@@ -1,0 +1,137 @@
+# Variante GitLab de cronjob.yaml : le même pod, sur un projet GitLab. Seuls
+# changent la forge (--forge gitlab), l'instance (--instance, dont
+# l'adaptateur déduit l'API et les clones ; à retirer pour gitlab.com), le
+# chemin du projet (--repo, sous-groupes compris) et la variable du jeton
+# (NIGHT_SHIFT_GITLAB_TOKEN). Les commentaires de cronjob.yaml valent ici.
+#
+# Le jeton d'accès de projet (rôle Developer) n'est monté que dans select et
+# les deux publish, jamais dans les étapes agent ; un test du dépôt
+# (examples/solo) le vérifie. Une passe ne s'exécute jamais dans un job de
+# CI : voir docs/gitlab.md.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: night-shift-pass-gitlab
+spec:
+  schedule: "0 2 * * *"
+  # Une seule passe active à la fois.
+  concurrencyPolicy: Forbid
+  # Le détail d'une passe (dépôts écartés, incidents) ne sort pas du cluster :
+  # il vit dans les logs de ses pods, consultables tant que son Job existe.
+  # On garde une semaine de passes nocturnes, réussies comme échouées.
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # Durée maximale de la passe : elle doit dépasser la somme des --timeout
+      # des deux agents et des --ci-timeout des deux publish, pour que la
+      # dernière Publication ait le temps de rendre le ticket.
+      activeDeadlineSeconds: 5400
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: select
+              image: ghcr.io/unpoiltefal/night-shift:latest
+              command: ["night-shift"]
+              args: ["select", "--forge", "gitlab", "--instance", "https://gitlab.example.com",
+                     "--repo", "group/subgroup/project", "--state", "/state", "--work", "/work"]
+              env:
+                - name: NIGHT_SHIFT_GITLAB_TOKEN
+                  valueFrom:
+                    secretKeyRef: {name: night-shift-gitlab, key: token}
+              volumeMounts:
+                - {name: state, mountPath: /state}
+                - {name: work, mountPath: /work}
+              securityContext: &hardened
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+            - name: agent
+              # Image d'outils du dépôt cible : night-shift, claude, git et la
+              # chaîne de build du dépôt (ici la couche Go ; un dépôt peut en
+              # dériver la sienne).
+              image: ghcr.io/unpoiltefal/night-shift-go:latest
+              command: ["night-shift"]
+              args: ["agent", "--state", "/state", "--work", "/work", "--timeout", "30m", "--auth", "subscription"]
+              env: &agentEnv
+                # Abonnement ; pour une clé d'API : --auth api-key et
+                # ANTHROPIC_API_KEY à la place.
+                - name: CLAUDE_CODE_OAUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef: {name: night-shift-model, key: token}
+                - {name: CLAUDE_CONFIG_DIR, value: /transcripts}
+                - {name: HOME, value: /tmp}
+              volumeMounts:
+                - {name: state, mountPath: /state, readOnly: true}
+                - {name: work, mountPath: /work}
+                - {name: transcripts, mountPath: /transcripts}
+                - {name: tmp, mountPath: /tmp}
+              securityContext: *hardened
+            - name: publish
+              image: ghcr.io/unpoiltefal/night-shift:latest
+              command: ["night-shift"]
+              args: ["publish", "--forge", "gitlab", "--instance", "https://gitlab.example.com",
+                     "--state", "/state", "--work", "/work", "--ci-timeout", "10m",
+                     "--next-state", "/state2", "--next-work", "/work2"]
+              env: &publishEnv
+                - name: NIGHT_SHIFT_GITLAB_TOKEN
+                  valueFrom:
+                    secretKeyRef: {name: night-shift-gitlab, key: token}
+                # Facultatif : sans webhook, le digest le signale et la passe
+                # réussit quand même.
+                - name: NIGHT_SHIFT_DISCORD_WEBHOOK
+                  valueFrom:
+                    secretKeyRef: {name: night-shift-discord, key: webhook, optional: true}
+                # La racine est en lecture seule : git écrit sous HOME.
+                - {name: HOME, value: /tmp}
+                - {name: TMPDIR, value: /tmp}
+              volumeMounts:
+                - {name: state, mountPath: /state, readOnly: true}
+                - {name: work, mountPath: /work, readOnly: true}
+                - {name: state2, mountPath: /state2}
+                - {name: work2, mountPath: /work2}
+                - {name: tmp, mountPath: /tmp}
+              securityContext: *hardened
+            - name: retry-agent
+              image: ghcr.io/unpoiltefal/night-shift-go:latest
+              command: ["night-shift"]
+              args: ["agent", "--state", "/state2", "--work", "/work2", "--timeout", "30m", "--auth", "subscription"]
+              env: *agentEnv
+              volumeMounts:
+                - {name: state2, mountPath: /state2, readOnly: true}
+                - {name: work2, mountPath: /work2}
+                - {name: transcripts, mountPath: /transcripts}
+                - {name: tmp, mountPath: /tmp}
+              securityContext: *hardened
+          containers:
+            - name: retry-publish
+              image: ghcr.io/unpoiltefal/night-shift:latest
+              command: ["night-shift"]
+              args: ["publish", "--follow-up", "--forge", "gitlab", "--instance", "https://gitlab.example.com",
+                     "--state", "/state2", "--work", "/work2", "--ci-timeout", "10m"]
+              env: *publishEnv
+              volumeMounts:
+                - {name: state2, mountPath: /state2, readOnly: true}
+                - {name: work2, mountPath: /work2, readOnly: true}
+                - {name: tmp, mountPath: /tmp}
+              securityContext: *hardened
+          volumes:
+            - {name: state, emptyDir: {}}
+            - {name: work, emptyDir: {}}
+            # Volumes du tour de relance, écrits par publish.
+            - {name: state2, emptyDir: {}}
+            - {name: work2, emptyDir: {}}
+            - {name: tmp, emptyDir: {}}
+            # Transcripts réservés à l'agent, conservés 30 jours par le
+            # déploiement.
+            - name: transcripts
+              persistentVolumeClaim: {claimName: night-shift-transcripts}

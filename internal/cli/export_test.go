@@ -17,7 +17,3 @@ func AddForge(t testing.TB, name, tokenEnv, apiURL, gitURL string, open func(api
 	})
 	t.Cleanup(func() { forges = previous })
 }
-
-// ForgeSecretEnv rend les variables de jeton de toutes les forges du
-// registre.
-var ForgeSecretEnv = forgeSecretEnv

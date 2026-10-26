@@ -167,7 +167,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	h := claude.Claude{
 		Bin: *bin, Dir: d.RepoDir(), BaseSHA: task.BaseSHA, OutDir: d.OutDir(),
 		Auth: claude.Auth(*auth), AllowedTools: splitList(*tools), Skill: *skill,
-		Timeout: *timeout, Env: os.Environ(), Secrets: append(forgeSecretEnv(), WebhookEnv),
+		Timeout: *timeout, Env: os.Environ(), Secrets: append(ForgeSecretEnv(), WebhookEnv),
 	}
 	res, err := h.Run(ctx, task)
 	if err != nil {

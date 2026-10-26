@@ -13,14 +13,15 @@ trustLevel:                     # required, raised only by a human decision
 
 toolImage: ghcr.io/example/tools-go:1   # optional, image providing the repo's build and test toolchain
 
-trustedAuthors:                 # optional, in addition to the forge's own association (owners, members, collaborators)
+trustedAuthors:                 # optional, in addition to the forge's own association
+                                # (GitHub: owners, members, collaborators; GitLab: Developer members and above)
   - alice
 
 forbiddenZones:                 # paths an agent commit must never modify: Publication refuses to push it
   - ".github/**"
   - "CLAUDE.md"
 
-sensitiveZones:                 # paths an agent PR may modify, but a human decides
+sensitiveZones:                 # paths an agent change request may modify, but a human decides
   - path: go.mod
     kind: go-dependencies       # flags only a new direct requirement or a new/changed replace
   - path: "deploy/**"           # kind defaults to generic: any change is flagged
@@ -94,6 +95,21 @@ jobs:
 You may then make **Zone check** a required status check on the default branch; it is no longer an opt-in condition (ADR 0011). Keep `.github/**` in `forbiddenZones` either way: a workflow added by an agent would run as soon as its branch is pushed, before any check, and only Publication's refusal stops it.
 
 **Do not use `pull_request`**: with that trigger GitHub runs the workflow file from the PR itself, so an agent PR could replace the check with one that always passes. Never add a step that builds or runs the PR's code to this workflow either: under `pull_request_target`, that code would run with the base branch's privileges.
+
+### On GitLab
+
+No GitLab CI equivalent of this check is needed, and none is provided. The guarantee is Publication's zone refusal, which runs before every push whatever the forge ([ADR 0011](adr/0011-publication-frontiere-des-zones.md)). A check in the target's CI could only run after the push, once a pipeline defined by the agent would already have started.
+
+What matters on GitLab is the list of forbidden zones. A pipeline starts as soon as an `agent/…` branch is pushed, from the `.gitlab-ci.yml` **of that branch**. Forbid it, and every file it includes from the repository:
+
+```yaml
+forbiddenZones:
+  - ".gitlab-ci.yml"
+  - ".gitlab/**"        # CI templates included with include: local, among others
+  - "ci/**"             # adapt to wherever your local includes live
+```
+
+An `include: local:` file left out of the forbidden zones would let the agent change the pipeline without touching `.gitlab-ci.yml`. See [Running night-shift on GitLab](gitlab.md) for the token, branch protection and protected variables.
 
 ### From the command line
 

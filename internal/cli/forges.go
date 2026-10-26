@@ -185,9 +185,10 @@ func forgeDefaults(value func(forgeAdapter) string) string {
 	return strings.Join(out, ", ")
 }
 
-// forgeSecretEnv rend les variables de jeton de toutes les forges du
-// registre : aucune n'atteint l'agent.
-func forgeSecretEnv() []string {
+// ForgeSecretEnv rend les variables de jeton de toutes les forges du
+// registre : aucune n'atteint l'agent, et un déploiement n'en monte aucune
+// dans une étape agent.
+func ForgeSecretEnv() []string {
 	var out []string
 	for _, f := range forges {
 		out = append(append(out, f.tokenEnv), f.toolEnv...)
@@ -201,7 +202,7 @@ func forgeSecretEnv() []string {
 // un jeton monté dans un fichier lui échappe, et la garantie reste le
 // déploiement (ADR 0011).
 func forgeToken(env []string) (name string, ok bool) {
-	names := forgeSecretEnv()
+	names := ForgeSecretEnv()
 	var prefixes []string
 	for _, f := range forges {
 		prefixes = append(prefixes, f.tokenPrefixes...)
