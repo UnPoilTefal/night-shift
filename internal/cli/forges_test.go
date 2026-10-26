@@ -187,3 +187,24 @@ func writeJSON(t *testing.T, path string, v any) {
 		t.Fatal(err)
 	}
 }
+
+func TestOneInstanceAddressWithoutTheOtherIsAUsageError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("appel réseau inattendu : %s %s", r.Method, r.URL)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv(cli.TokenEnv, secret)
+	t.Setenv(cli.GitLabTokenEnv, "glpat-x")
+	for _, forge := range []string{"github", "gitlab"} {
+		for _, flag := range []string{"--api-url", "--git-url"} {
+			t.Run(forge+" "+flag, func(t *testing.T) {
+				// Seule, l'adresse de l'instance laisserait cloner sur la forge
+				// publique avec le jeton de l'instance.
+				code, _, stderr := run("select", "--forge", forge, "--repo", "g/p", flag, srv.URL, "--state", t.TempDir(), "--work", t.TempDir())
+				if code != 2 || !strings.Contains(stderr, "--api-url et --git-url") {
+					t.Fatalf("code = %d, stderr = %q ; attendu une erreur d'usage", code, stderr)
+				}
+			})
+		}
+	}
+}

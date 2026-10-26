@@ -150,15 +150,15 @@ CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state2 --work /work2 --
 NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift publish --follow-up --state /state2 --work /work2
 ```
 
-`select`, `publish` and `pass` take `--forge <name>` to choose the forge adapter: `github` (the default, so existing deployments need no change) or `gitlab`. An unknown name or a badly formed `--repo` is a usage error (exit code 2), raised before any network call. The task records the forge that reserved it, and `publish` refuses a task reserved on another forge. Whatever the forge, the agent step refuses to start when any variable of any registered adapter carries a token.
+`select`, `publish` and `pass` take `--forge <name>` to choose the forge adapter: `github` (the default, so existing deployments need no change) or `gitlab`. An unknown name, a badly formed `--repo`, or only one of `--api-url` and `--git-url` is a usage error (exit code 2), raised before any network call. The last rule keeps a self-managed instance's token from being sent to the public forge's default clone address. The task records the forge that reserved it, and `publish` refuses a task reserved on another forge. Whatever the forge, the agent step refuses to start when any variable of any registered adapter carries a token.
 
 | | `github` | `gitlab` |
 |---|---|---|
 | Token variable | `NIGHT_SHIFT_GITHUB_TOKEN` | `NIGHT_SHIFT_GITLAB_TOKEN` |
 | `--repo` | `owner/repo` | full project path, subgroups included: `group/subgroup/project` |
-| `--api-url`, `--git-url` defaults | `https://api.github.com`, `https://github.com` (set them for GitHub Enterprise Server) | `https://gitlab.com/api/v4`, `https://gitlab.com` (set them for a self-managed instance) |
+| `--api-url`, `--git-url` defaults | `https://api.github.com`, `https://github.com` (set both for GitHub Enterprise Server) | `https://gitlab.com/api/v4`, `https://gitlab.com` (set both for a self-managed instance) |
 | Change request | Draft pull request | Merge request titled `Draft: …`, source branch kept |
-| CI rounds read | Check runs and commit statuses | Jobs of the commit's latest pipeline, with the end of each failed job's log |
+| CI rounds read | Check runs and commit statuses | Jobs of the commit's latest pipeline, trigger jobs of child pipelines included, with the end of each failed job's log; for merged results pipelines, the merge request's head pipeline |
 | Trusted authors | Owners, members and collaborators | Project members with the Developer role or above, direct or inherited from a group |
 | Blocked tickets | Native issue dependencies | `is blocked by` links where the edition has them, plus a `Blocked by: #n, #m` line in the issue body |
 

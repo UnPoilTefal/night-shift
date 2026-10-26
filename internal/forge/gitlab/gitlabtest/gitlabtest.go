@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -65,18 +66,27 @@ type MergeRequest struct {
 	Labels                     []string
 	RemoveSourceBranch         bool
 	Notes                      []Note
+	// SHA est le commit de tête de la merge request.
+	SHA string
 }
 
-// Draft dit si la merge request est un brouillon, ce que GitLab lit dans le
-// préfixe de son titre.
-func (m MergeRequest) Draft() bool { return strings.HasPrefix(m.Title, "Draft:") }
+// draftMarker est une marque de brouillon que GitLab reconnaît en tête de
+// titre, sans égard à la casse.
+var draftMarker = regexp.MustCompile(`(?i)^\s*(\[draft\]|\(draft\)|draft:)`)
 
-// Job est un job de pipeline ; Trace est son log.
+// Draft dit si la merge request est un brouillon, ce que GitLab lit dans la
+// marque en tête de son titre.
+func (m MergeRequest) Draft() bool { return draftMarker.MatchString(m.Title) }
+
+// Job est un job de pipeline ; Trace est son log. Un job de déclenchement
+// (Downstream non vide) lance une pipeline enfant ou aval, dont Downstream
+// est l'état.
 type Job struct {
 	Name, Status string
 	AllowFailure bool
 	WebURL       string
 	Trace        string
+	Downstream   string
 }
 
 type project struct {
@@ -87,6 +97,8 @@ type project struct {
 	members  map[int]int
 	group    map[int]int
 	pipeline map[string]*pipeline
+	// head est la pipeline de tête de chaque merge request, par iid.
+	head map[int]*pipeline
 }
 
 type pipeline struct {
@@ -125,7 +137,7 @@ func New(t *testing.T, token string) *Server {
 func (s *Server) project(repo string) *project {
 	p := s.projects[repo]
 	if p == nil {
-		p = &project{files: map[string]string{}, members: map[int]int{}, group: map[int]int{}, pipeline: map[string]*pipeline{}}
+		p = &project{files: map[string]string{}, members: map[int]int{}, group: map[int]int{}, pipeline: map[string]*pipeline{}, head: map[int]*pipeline{}}
 		s.projects[repo] = p
 	}
 	return p
@@ -189,6 +201,31 @@ func (s *Server) SetFile(repo, path, content string) {
 func (s *Server) SetPipeline(repo, sha, status string, jobs ...Job) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	p := s.newPipeline(status, jobs)
+	if repo == "" {
+		s.fallback = p
+		return
+	}
+	s.project(repo).pipeline[sha] = p
+}
+
+// SetMergeRequestPipeline fait de sha la tête de la merge request iid, et de
+// status, avec ses jobs, sa pipeline de tête, celle d'une pipeline de
+// résultats fusionnés : elle porte un commit de fusion, et la recherche par
+// sha ne la trouve pas.
+func (s *Server) SetMergeRequestPipeline(repo string, iid int, sha, status string, jobs ...Job) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.project(repo)
+	m := find(p.mrs, iid)
+	if m == nil {
+		panic(fmt.Sprintf("merge request %s!%d inconnue", repo, iid))
+	}
+	m.SHA = sha
+	p.head[iid] = s.newPipeline(status, jobs)
+}
+
+func (s *Server) newPipeline(status string, jobs []Job) *pipeline {
 	s.ids++
 	p := &pipeline{id: s.ids, status: status}
 	s.pipelines[p.id] = p
@@ -197,11 +234,7 @@ func (s *Server) SetPipeline(repo, sha, status string, jobs ...Job) {
 		s.jobs[s.ids] = j
 		p.jobs = append(p.jobs, s.ids)
 	}
-	if repo == "" {
-		s.fallback = p
-		return
-	}
-	s.project(repo).pipeline[sha] = p
+	return p
 }
 
 // Issue rend l'état d'une issue.
@@ -396,6 +429,25 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		p.mrs = append(p.mrs, m)
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, map[string]any{"iid": m.IID, "web_url": s.webURL(repo, "merge_requests", m.IID), "draft": m.Draft()})
+	case route[0] == "merge_requests" && len(route) == 2 && r.Method == http.MethodGet:
+		m := find(p.mrs, n(1))
+		if m == nil {
+			notFound(w)
+			return
+		}
+		e := map[string]any{"iid": m.IID, "sha": m.SHA, "head_pipeline": nil}
+		if pl := p.head[m.IID]; pl != nil {
+			e["head_pipeline"] = s.pipelineJSON(repo, pl)
+		}
+		writeJSON(w, e)
+	case route[0] == "repository" && len(route) == 4 && route[1] == "commits" && route[3] == "merge_requests" && r.Method == http.MethodGet:
+		out := []map[string]any{}
+		for _, m := range p.mrs {
+			if m.SHA == route[2] {
+				out = append(out, map[string]any{"iid": m.IID, "sha": m.SHA})
+			}
+		}
+		writeJSON(w, out)
 	case route[0] == "merge_requests" && len(route) == 2 && r.Method == http.MethodPut:
 		m := find(p.mrs, n(1))
 		if m == nil {
@@ -419,10 +471,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			pl = s.fallback
 		}
 		if pl != nil {
-			out = append(out, map[string]any{"id": pl.id, "status": pl.status, "web_url": fmt.Sprintf("https://gitlab.example/%s/-/pipelines/%d", repo, pl.id)})
+			out = append(out, s.pipelineJSON(repo, pl))
 		}
 		writeJSON(w, out)
-	case route[0] == "pipelines" && len(route) == 3 && route[2] == "jobs" && r.Method == http.MethodGet:
+	case route[0] == "pipelines" && len(route) == 3 && (route[2] == "jobs" || route[2] == "bridges") && r.Method == http.MethodGet:
 		pl := s.pipelines[n(1)]
 		if pl == nil {
 			notFound(w)
@@ -431,7 +483,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		out := []map[string]any{}
 		for _, id := range pl.jobs {
 			j := s.jobs[id]
-			out = append(out, map[string]any{"id": id, "name": j.Name, "status": j.Status, "allow_failure": j.AllowFailure, "web_url": j.WebURL})
+			if (j.Downstream != "") != (route[2] == "bridges") {
+				continue
+			}
+			e := map[string]any{"id": id, "name": j.Name, "status": j.Status, "allow_failure": j.AllowFailure, "web_url": j.WebURL}
+			if j.Downstream != "" {
+				e["downstream_pipeline"] = map[string]any{"id": 1000 + id, "status": j.Downstream, "web_url": fmt.Sprintf("https://gitlab.example/%s/-/pipelines/%d", repo, 1000+id)}
+			}
+			out = append(out, e)
 		}
 		writeJSON(w, out)
 	case route[0] == "jobs" && len(route) == 3 && route[2] == "trace" && r.Method == http.MethodGet:
@@ -462,6 +521,10 @@ func (s *Server) listIssues(w http.ResponseWriter, r *http.Request, repo string,
 		}
 	}
 	writeJSON(w, out)
+}
+
+func (s *Server) pipelineJSON(repo string, pl *pipeline) map[string]any {
+	return map[string]any{"id": pl.id, "status": pl.status, "web_url": fmt.Sprintf("https://gitlab.example/%s/-/pipelines/%d", repo, pl.id)}
 }
 
 func (s *Server) issueJSON(repo string, i *Issue) map[string]any {
