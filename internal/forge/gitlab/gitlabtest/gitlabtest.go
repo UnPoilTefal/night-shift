@@ -107,9 +107,11 @@ type pipeline struct {
 	jobs   []int
 }
 
-// Server est l'API simulée. URL est la base de l'API, jusqu'à /api/v4.
+// Server est l'API simulée. URL est la base de l'API, jusqu'à /api/v4, et
+// Base celle de l'instance. Une requête hors de l'API est une requête git :
+// elle est notée, puis refusée.
 type Server struct {
-	URL string
+	URL, Base string
 
 	t     *testing.T
 	token string
@@ -121,6 +123,7 @@ type Server struct {
 	pipelines map[int]*pipeline
 	ids       int
 	calls     []string
+	gitCalls  []string
 	// fallback est la pipeline de tout commit qui n'en a pas d'autre.
 	fallback *pipeline
 }
@@ -130,6 +133,7 @@ func New(t *testing.T, token string) *Server {
 	s := &Server{t: t, token: token, projects: map[string]*project{}, jobs: map[int]Job{}, pipelines: map[int]*pipeline{}}
 	srv := httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(srv.Close)
+	s.Base = srv.URL
 	s.URL = srv.URL + "/api/v4"
 	return s
 }
@@ -281,6 +285,13 @@ func (s *Server) Labels(repo string) []string {
 	return slices.Clone(s.project(repo).labels)
 }
 
+// GitCalls rend les requêtes git reçues, « utilisateur chemin ».
+func (s *Server) GitCalls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.gitCalls)
+}
+
 // Calls rend les requêtes reçues, « MÉTHODE chemin » sans la base de l'API.
 func (s *Server) Calls() []string {
 	s.mu.Lock()
@@ -306,6 +317,14 @@ func (s *Server) webURL(repo, kind string, iid int) string {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasPrefix(r.URL.Path, "/api/v4/") {
+		user, _, _ := r.BasicAuth()
+		s.mu.Lock()
+		s.gitCalls = append(s.gitCalls, user+" "+r.URL.Path)
+		s.mu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
 	if r.Header.Get("PRIVATE-TOKEN") != s.token {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"message": "401 Unauthorized"}`))

@@ -201,7 +201,7 @@ func TestOneInstanceAddressWithoutTheOtherIsAUsageError(t *testing.T) {
 				// Seule, l'adresse de l'instance laisserait cloner sur la forge
 				// publique avec le jeton de l'instance.
 				code, _, stderr := run("select", "--forge", forge, "--repo", "g/p", flag, srv.URL, "--state", t.TempDir(), "--work", t.TempDir())
-				if code != 2 || !strings.Contains(stderr, "--api-url et --git-url") {
+				if code != 2 || !strings.Contains(stderr, "--api-url et --git-url désignent") {
 					t.Fatalf("code = %d, stderr = %q ; attendu une erreur d'usage", code, stderr)
 				}
 			})

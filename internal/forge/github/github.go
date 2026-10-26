@@ -25,6 +25,13 @@ const DefaultBaseURL = "https://api.github.com"
 // DefaultGitURL est la base des adresses de clone de github.com.
 const DefaultGitURL = "https://github.com"
 
+// Instance rend les adresses de l'API et des clones d'une instance GitHub
+// Enterprise Server servie à base.
+func Instance(base string) (apiURL, gitURL string) {
+	base = strings.TrimSuffix(base, "/")
+	return base + "/api/v3", base
+}
+
 // ToolTokenEnv sont les variables où les outils GitHub (gh, actions)
 // cherchent un jeton.
 var ToolTokenEnv = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}

@@ -202,3 +202,46 @@ func TestEachForgeChecksTheShapeOfItsRepos(t *testing.T) {
 		})
 	}
 }
+
+func TestInstanceDerivesTheAPIAndTheCloneFromOneBase(t *testing.T) {
+	w := newGitLabWorld(t)
+	t.Setenv(cli.TokenEnv, "")
+	t.Setenv(cli.GitLabTokenEnv, glSecret)
+
+	// Le clone échoue sur l'instance simulée, qui ne sert pas git : le
+	// ticket revient à un humain, et select réussit quand même.
+	code, stdout, stderr := run("select", "--forge", "gitlab", "--instance", w.gl.Base+"/", "--repo", glRepo, "--state", w.state, "--work", w.work)
+
+	if code != 0 || !slices.Contains(w.lifecycle(), forge.LabelHuman) {
+		t.Fatalf("select : code %d, labels %v\n%s\n%s", code, w.lifecycle(), stdout, stderr)
+	}
+	if calls := w.gl.GitCalls(); len(calls) == 0 || !strings.HasPrefix(calls[0], "oauth2 /g/sub/p.git/") {
+		t.Fatalf("requêtes git = %q, attendu le clone de g/sub/p sur l'instance, avec l'utilisateur oauth2", calls)
+	}
+	if strings.Contains(stdout+stderr, glSecret) {
+		t.Fatal("le jeton apparaît dans une sortie")
+	}
+}
+
+func TestInstanceIsTheOnlyAddressOrAWellFormedOne(t *testing.T) {
+	t.Setenv(cli.GitLabTokenEnv, glSecret)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--instance", "https://g.example", "--api-url", "https://g.example/api/v4"}, "--instance exclut"},
+		{[]string{"--instance", "https://g.example", "--git-url", "https://g.example"}, "--instance exclut"},
+		{[]string{"--instance", "g.example"}, "invalide"},
+		{[]string{"--instance", "ftp://g.example"}, "invalide"},
+		{[]string{"--instance", "https://g.example?x=1"}, "invalide"},
+		{[]string{"--instance", "https://moi:motdepasse@g.example"}, "invalide"},
+	} {
+		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
+			args := append([]string{"select", "--forge", "gitlab", "--repo", "g/p", "--state", t.TempDir(), "--work", t.TempDir()}, c.args...)
+			code, _, stderr := run(args...)
+			if code != 2 || !strings.Contains(stderr, c.want) || strings.Contains(stderr, "motdepasse") {
+				t.Fatalf("code = %d, stderr = %q ; attendu une erreur d'usage %q", code, stderr, c.want)
+			}
+		})
+	}
+}

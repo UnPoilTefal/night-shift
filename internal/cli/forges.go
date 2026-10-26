@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -24,8 +25,10 @@ type Forge interface {
 // c'est ajouter une entrée, sans toucher aux étapes ni à la passe.
 type forgeAdapter struct {
 	name string
-	// apiURL et gitURL sont les valeurs par défaut de --api-url et --git-url.
+	// apiURL et gitURL sont les adresses de la forge publique, par défaut ;
+	// instance déduit les deux d'une instance dédiée ou auto-hébergée.
 	apiURL, gitURL string
+	instance       func(base string) (apiURL, gitURL string)
 	// tokenEnv est la variable qui porte le jeton de cette forge.
 	tokenEnv string
 	// toolEnv sont les autres variables où les outils de cette forge
@@ -56,6 +59,7 @@ var forges = []forgeAdapter{{
 	name:          defaultForge,
 	apiURL:        github.DefaultBaseURL,
 	gitURL:        github.DefaultGitURL,
+	instance:      github.Instance,
 	tokenEnv:      TokenEnv,
 	toolEnv:       github.ToolTokenEnv,
 	tokenPrefixes: github.TokenPrefixes,
@@ -66,6 +70,7 @@ var forges = []forgeAdapter{{
 	name:          "gitlab",
 	apiURL:        gitlab.DefaultBaseURL,
 	gitURL:        gitlab.DefaultGitURL,
+	instance:      gitlab.Instance,
 	tokenEnv:      GitLabTokenEnv,
 	toolEnv:       gitlab.ToolTokenEnv,
 	tokenPrefixes: gitlab.TokenPrefixes,
@@ -86,7 +91,7 @@ func lookupForge(name string) (forgeAdapter, error) {
 // forgeFlags porte le choix de la forge et de ses adresses ; une adresse
 // vide prend la valeur de l'adaptateur choisi.
 type forgeFlags struct {
-	name, apiURL, gitURL string
+	name, instance, apiURL, gitURL string
 	// withGit dit si l'étape clone ou pousse, et prend donc --git-url.
 	withGit bool
 }
@@ -94,11 +99,38 @@ type forgeFlags struct {
 func addForgeFlags(fs *flag.FlagSet, withGit bool) *forgeFlags {
 	ff := &forgeFlags{withGit: withGit}
 	fs.StringVar(&ff.name, "forge", defaultForge, "adaptateur de forge : "+forgeNames())
-	fs.StringVar(&ff.apiURL, "api-url", "", "URL de l'API de la forge (par défaut, "+forgeDefaults(func(f forgeAdapter) string { return f.apiURL })+")")
+	fs.StringVar(&ff.instance, "instance", "", "adresse de base d'une instance dédiée ou auto-hébergée, dont l'adaptateur déduit l'API et les clones (par défaut, la forge publique : "+
+		forgeDefaults(func(f forgeAdapter) string { return f.gitURL })+")")
+	fs.StringVar(&ff.apiURL, "api-url", "", "URL de l'API, pour une topologie que --instance ne décrit pas")
 	if withGit {
-		fs.StringVar(&ff.gitURL, "git-url", "", "base des adresses de clone (par défaut, "+forgeDefaults(func(f forgeAdapter) string { return f.gitURL })+")")
+		fs.StringVar(&ff.gitURL, "git-url", "", "base des adresses de clone, à donner avec --api-url")
 	}
 	return ff
+}
+
+// addresses rend les adresses de l'API et des clones : celles de la forge
+// publique, celles que l'adaptateur déduit de --instance, ou la paire
+// --api-url et --git-url, toujours donnée entière. Deux adresses ne peuvent
+// ainsi désigner deux instances : le jeton de l'une partirait vers l'autre.
+func (ff *forgeFlags) addresses(a forgeAdapter) (apiURL, gitURL string, err error) {
+	pair := ff.apiURL != "" || ff.gitURL != ""
+	switch {
+	case ff.instance != "" && pair:
+		return "", "", fmt.Errorf("--instance exclut --api-url et --git-url")
+	case ff.instance != "":
+		u, err := url.Parse(ff.instance)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			// L'adresse n'est pas recopiée : elle peut porter un identifiant.
+			return "", "", fmt.Errorf("--instance invalide, attendu une adresse http(s) sans identifiant, requête ni fragment")
+		}
+		apiURL, gitURL = a.instance(ff.instance)
+		return apiURL, gitURL, nil
+	case ff.withGit && (ff.apiURL == "") != (ff.gitURL == ""):
+		return "", "", fmt.Errorf("--api-url et --git-url désignent la même instance : les donner ensemble, ou employer --instance")
+	case ff.apiURL != "":
+		return ff.apiURL, ff.gitURL, nil
+	}
+	return a.apiURL, a.gitURL, nil
 }
 
 // repoUsage décrit --repo, dont la forme dépend de la forge.
@@ -107,10 +139,9 @@ func repoUsage() string {
 }
 
 // open construit l'adaptateur choisi avec le jeton de sa variable, après
-// avoir vérifié la forme des dépôts candidats. Une forge inconnue, un dépôt
-// mal formé, une seule des deux adresses ou un jeton absent est une erreur
-// d'usage, signalée avant tout appel réseau : l'adresse de clone par défaut
-// d'une forge publique recevrait le jeton d'une autre instance.
+// avoir vérifié la forme des dépôts candidats et les adresses. Une forge
+// inconnue, un dépôt mal formé, des adresses incohérentes ou un jeton absent
+// est une erreur d'usage, signalée avant tout appel réseau.
 func (ff *forgeFlags) open(cmd string, stderr io.Writer, repos ...string) (Forge, string, bool) {
 	a, err := lookupForge(ff.name)
 	if err != nil {
@@ -123,21 +154,15 @@ func (ff *forgeFlags) open(cmd string, stderr io.Writer, repos ...string) (Forge
 			return nil, "", false
 		}
 	}
-	if ff.withGit && (ff.apiURL == "") != (ff.gitURL == "") {
-		_, _ = fmt.Fprintf(stderr, "%s : --api-url et --git-url désignent la même instance : les donner ensemble ou pas du tout\n", cmd)
+	apiURL, gitURL, err := ff.addresses(a)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s : %v\n", cmd, err)
 		return nil, "", false
 	}
 	token := os.Getenv(a.tokenEnv)
 	if token == "" {
 		_, _ = fmt.Fprintf(stderr, "%s : la variable %s doit porter le jeton de la forge %s\n", cmd, a.tokenEnv, a.name)
 		return nil, "", false
-	}
-	apiURL, gitURL := ff.apiURL, ff.gitURL
-	if apiURL == "" {
-		apiURL = a.apiURL
-	}
-	if gitURL == "" {
-		gitURL = a.gitURL
 	}
 	return a.open(apiURL, gitURL, token), token, true
 }

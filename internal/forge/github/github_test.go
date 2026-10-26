@@ -269,3 +269,9 @@ func TestChecksMergesCheckRunsAndStatusesWithFailureExcerpts(t *testing.T) {
 		t.Errorf("extrait de build : %d caractères, au plus %d", n, github.MaxExcerpt)
 	}
 }
+
+func TestAnEnterpriseServerServesItsAPIAndItsClonesFromOneBase(t *testing.T) {
+	if api, git := github.Instance("https://ghe.corp.example/"); api != "https://ghe.corp.example/api/v3" || git != "https://ghe.corp.example" {
+		t.Fatalf("Instance = %q, %q", api, git)
+	}
+}
