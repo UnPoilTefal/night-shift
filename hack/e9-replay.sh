@@ -166,7 +166,12 @@ publish=0
 run -e "$FORGE_TOKEN_ENV" -v "$tmp/state:/state:ro" -v "$tmp/work:/work:ro" \
 	"$image" night-shift publish "${FORGE_ARGS[@]}" --state /state --work /work --ci-timeout "${E9_CI_TIMEOUT:-2m}" |
 	tee "$tmp/publish.log" || publish=$?
-digest=$(sed -n "s|^digest $repo : .*/issues/\([0-9]*\)$|\1|p" "$tmp/publish.log" | head -n 1)
+# Le numéro termine l'adresse du digest, quelle que soit sa forme
+# (…/issues/14 sur GitHub, …/-/work_items/2 sur gitlab.com).
+digest=$(sed -n "s|^digest $repo : .*/\([0-9][0-9]*\)$|\1|p" "$tmp/publish.log" | head -n 1)
+if [ -z "$digest" ] && grep -q "^digest $repo : " "$tmp/publish.log"; then
+	fail "numéro du digest illisible dans : $(grep "^digest $repo : " "$tmp/publish.log")"
+fi
 echo "publish : code de sortie $publish"
 
 echo "== délai de grâce de ${grace}s pour une éventuelle CI"

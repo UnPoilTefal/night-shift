@@ -636,7 +636,9 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("PRIVATE-TOKEN", c.token)
+	// Bearer sert tous les jetons : d'accès personnels, de projet ou de
+	// groupe, et OAuth, que l'en-tête PRIVATE-TOKEN refuse.
+	req.Header.Set("Authorization", "Bearer "+c.token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

@@ -21,7 +21,7 @@ forge_setup() {
 	gl_api=${gl_api%/}/api/v4
 	gl_project=$(jq -rn --arg r "$repo" '$r | @uri')
 	gl_auth=$(mktemp)
-	printf 'PRIVATE-TOKEN: %s\n' "$NIGHT_SHIFT_GITLAB_TOKEN" >"$gl_auth"
+	printf 'Authorization: Bearer %s\n' "$NIGHT_SHIFT_GITLAB_TOKEN" >"$gl_auth"
 }
 
 forge_teardown() { [ -z "$gl_auth" ] || rm -f "$gl_auth"; }

@@ -117,7 +117,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Choose the forge adapter of a pass with an option ([#81](https://github.com/UnPoilTefal/night-shift/issues/81))
 - [x] GitLab adapter, the first one added: issues as a ticket source, draft merge requests, pipelines for CI rounds, gitlab.com or a self-managed instance ([#82](https://github.com/UnPoilTefal/night-shift/issues/82))
 - [x] GitLab deployment example, installation guide, opt-in guidance and a zone-refusal proof that replays on either forge ([#83](https://github.com/UnPoilTefal/night-shift/issues/83))
-- [ ] A pass on a real GitLab instance, run by the maintainer ([#57](https://github.com/UnPoilTefal/night-shift/issues/57))
+- [ ] A full pass on a real GitLab instance (draft merge request, CI rounds), run by the maintainer ([#57](https://github.com/UnPoilTefal/night-shift/issues/57)). The zone-refusal proof already passes on gitlab.com
 
 **Platform tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/12))
 
@@ -231,7 +231,7 @@ A repository's tool image derives from either one: `FROM ghcr.io/unpoiltefal/nig
 - the ticket is `ready-for-human`, with a zone-refusal comment that names the path and the zone;
 - the default branch's SHA is unchanged.
 
-It prints one line per check and exits 0 only if every check passes and the cleanup succeeds. Last replay on GitHub: against the published `0.2.0` image on 2026-10-25, every check passed ([#69](https://github.com/UnPoilTefal/night-shift/issues/69)). It has not been replayed on GitLab yet. Cleanup always runs, even after a failure or an interruption. It closes the test ticket and the digest issue, and deletes any PR or branch the run created, nothing else.
+It prints one line per check and exits 0 only if every check passes and the cleanup succeeds. Last replays, on 2026-10-26 with an image built from the branch of [#83](https://github.com/UnPoilTefal/night-shift/issues/83): every check passed on a GitHub sandbox and on a private gitlab.com sandbox. Before that, against the published `0.2.0` image on GitHub on 2026-10-25 ([#69](https://github.com/UnPoilTefal/night-shift/issues/69)). Cleanup always runs, even after a failure or an interruption. It closes the test ticket and the digest issue, and deletes any PR or branch the run created, nothing else.
 
 ```sh
 NIGHT_SHIFT_GITHUB_TOKEN=… make e9-replay E9_REPO=owner/sandbox E9_IMAGE=ghcr.io/unpoiltefal/night-shift:<version>
