@@ -329,7 +329,7 @@ func TestGitAccessPresentsTheTokenAsOauth2WithNoreplyIdentitiesOfTheInstance(t *
 func TestTheTokenNeverAppearsInAnErrorFromTheAPIOrFromGit(t *testing.T) {
 	var auth []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth = append(auth, r.Header.Get("PRIVATE-TOKEN")+r.Header.Get("Authorization"))
+		auth = append(auth, r.Header.Get("Authorization"))
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(w, `{"message": "401 Unauthorized: `+token+`"}`)
 	}))

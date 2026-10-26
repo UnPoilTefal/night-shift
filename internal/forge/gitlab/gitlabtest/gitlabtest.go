@@ -325,7 +325,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if r.Header.Get("PRIVATE-TOKEN") != s.token {
+	if r.Header.Get("Authorization") != "Bearer "+s.token {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"message": "401 Unauthorized"}`))
 		return

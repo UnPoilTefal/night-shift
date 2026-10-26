@@ -2,7 +2,7 @@
 
 night-shift talks to GitLab through its **GitLab adapter**, which serves both the ticket source and the code forge contracts ([ADR 0012](adr/0012-outils-derriere-des-contrats.md)). The pass itself is the same as on GitHub. This guide covers what differs: the token, branch protection, network egress, an internal certificate authority, and where a pass may run.
 
-It works with gitlab.com and with a dedicated or self-managed instance. Nobody has run it against a real instance yet: that acceptance belongs to the maintainer ([#57](https://github.com/UnPoilTefal/night-shift/issues/57)). Points still to confirm there are marked *to confirm*.
+It works with gitlab.com and with a dedicated or self-managed instance. On 2026-10-26, the zone-refusal proof passed on a private gitlab.com project: selection, reservation, zone refusal, comments and digest ran against the real API. A full pass, with a draft merge request and CI rounds, is still to be run by the maintainer ([#57](https://github.com/UnPoilTefal/night-shift/issues/57)). Points still to confirm there are marked *to confirm*.
 
 ## Deploy the pass
 
@@ -26,7 +26,7 @@ A scheduled pipeline may still *trigger* a pass, for instance by creating a Kube
 
 ## Token
 
-Use a **project access token** with the **Developer** role. A group access token works for several projects, but gives the same rights on every project of the group.
+Use a **project access token** with the **Developer** role. A group access token works for several projects, but gives the same rights on every project of the group. night-shift sends the token as `Authorization: Bearer`, which GitLab accepts for personal, project and group access tokens as well as OAuth tokens.
 
 - **Scopes**: `api` and `write_repository` (*to confirm*). GitLab has no scope limited to issues and repositories: writing to issues and merge requests requires `api`, which grants much more. The real limit comes from the **Developer role** and the **protected default branch** (below), not from the scope.
 - **Availability**: on gitlab.com, project and group access tokens need a paid tier. On the Free tier, create a dedicated service account, invite it to the project as Developer, and use one of its personal access tokens.
