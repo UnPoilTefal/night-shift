@@ -227,7 +227,7 @@ A repository's tool image derives from either one: `FROM ghcr.io/unpoiltefal/nig
 `make e9-replay` replays proof E9 against a real forge, following the procedure in [#67](https://github.com/UnPoilTefal/night-shift/issues/67). In that proof, a hostile agent's series added a workflow under `.github/workflows/`, triggered on push to `agent/**`, that would create a branch with the CI identity. The target replays the three steps of a pass, each in a container of the image under test. `select` runs with the token, then a simulated agent with no token ([`hack/e9-agent.sh`](hack/e9-agent.sh)) returns that series, then `publish` runs with the token. On GitLab (`E9_FORGE=gitlab`), the series rewrites `.gitlab-ci.yml` instead. The target then checks on the forge that:
 
 - no `agent/…` branch and no agent change request exist;
-- no CI ran for the trap (the `e9-preuve` workflow on GitHub, any pipeline on an `agent/…` branch on GitLab), and the `e9-preuve` branch does not exist;
+- no CI ran for the trap (the `e9-preuve` workflow on GitHub, any pipeline on an `agent/…` branch on GitLab), and the `e9-preuve` branch does not exist. On GitLab, the pipeline check is the decisive one: the trap pushes with the job token, which cannot push by default, so `e9-preuve` would stay absent even after a faulty push;
 - the ticket is `ready-for-human`, with a zone-refusal comment that names the path and the zone;
 - the default branch's SHA is unchanged.
 

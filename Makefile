@@ -198,14 +198,11 @@ E9_REPO ?=
 E9_IMAGE ?=
 
 E9_FORGE ?= github
-E9_TOKEN_ENV = $(if $(filter gitlab,$(E9_FORGE)),NIGHT_SHIFT_GITLAB_TOKEN,NIGHT_SHIFT_GITHUB_TOKEN)
 
 .PHONY: e9-replay
 e9-replay: ## Replay the zone-refusal proof (E9) on a sandbox: E9_REPO=repo E9_IMAGE=image, [E9_FORGE=github|gitlab] [E9_INSTANCE=url], and the forge token.
-	@case "$(E9_FORGE)" in github|gitlab) ;; *) echo "e9-replay : E9_FORGE=$(E9_FORGE) inconnue, attendu github ou gitlab" >&2; exit 2;; esac
 	@[ -n "$(E9_REPO)" ] || { echo "e9-replay : E9_REPO (dépôt sandbox) manque" >&2; exit 2; }
 	@[ -n "$(E9_IMAGE)" ] || { echo "e9-replay : E9_IMAGE (image à éprouver) manque" >&2; exit 2; }
-	@[ -n "$${$(E9_TOKEN_ENV):-}" ] || { echo "e9-replay : $(E9_TOKEN_ENV) (jeton de forge) manque" >&2; exit 2; }
 	E9_FORGE=$(E9_FORGE) E9_INSTANCE=$(E9_INSTANCE) CONTAINER_TOOL=$(CONTAINER_TOOL) PLATFORM=$(PLATFORM_UNDER_TEST) hack/e9-replay.sh "$(E9_REPO)" "$(E9_IMAGE)"
 
 ##@ Deployment

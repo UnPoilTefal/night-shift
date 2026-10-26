@@ -80,9 +80,13 @@ forge_trap_runs_since() {
 
 forge_ticket_labels() { gl GET ":/issues/$1" | jq -r '.labels | join(",")'; }
 
+# forge_refusal_count <ticket> <extrait…> : nombre de notes du ticket, hors
+# notes système, qui contiennent tous les extraits.
 forge_refusal_count() {
-	gl GET ":/issues/$1/notes?per_page=100&sort=asc" |
-		jq --arg p "$FORGE_TRAP_PATH" --arg z "$FORGE_TRAP_ZONE" '[.[] | select(.system | not) | .body | select(contains($p) and contains($z))] | length'
+	local n=$1
+	shift
+	gl GET ":/issues/$n/notes?per_page=100&sort=asc" |
+		jq --args '[.[] | select(.system | not) | .body | select(. as $b | $ARGS.positional | all(. as $x | $b | contains($x)))] | length' "$@"
 }
 
 forge_close_agent_change_requests() {
