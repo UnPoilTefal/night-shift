@@ -45,6 +45,19 @@ var credentialEnv = map[Auth]string{ // #nosec G101 -- noms de variables, pas de
 // n'est configuré : lire et éditer le dépôt, et lancer git, go et make.
 var DefaultAllowedTools = []string{"Read", "Edit", "Write", "Glob", "Grep", "Skill", "Bash(git *)", "Bash(go *)", "Bash(make *)"}
 
+// DeniedTools sont refusés à l'agent quels que soient les outils permis :
+// une adhésion qui autorise large (Bash(gh *)) ne les lève pas. Ce sont les
+// actions irréversibles de l'épreuve de sortie de vague 0 : pousser, dont
+// sur la branche par défaut (E1), éditer le corps d'un ticket ou d'une
+// demande de changement (E2), fusionner (E3). Défense en profondeur : la
+// garantie reste l'absence de jeton d'écriture chez l'agent (ADR 0005), qui
+// couvre aussi les autres chemins (appel d'API brut, script, git -C).
+var DeniedTools = []string{
+	"Bash(git push*)",
+	"Bash(gh issue edit*)", "Bash(gh pr edit*)", "Bash(glab issue update*)", "Bash(glab mr update*)",
+	"Bash(gh pr merge*)", "Bash(glab mr merge*)",
+}
+
 // NeedsInfoFile est le fichier, hors du clone, où l'agent écrit le motif de
 // son arrêt quand il lui manque une information.
 const NeedsInfoFile = "needs-info.md"
@@ -112,6 +125,7 @@ func (c Claude) Run(ctx context.Context, task harness.Task) (harness.Result, err
 		"--output-format", "json",
 		"--permission-mode", "dontAsk",
 		"--allowedTools", strings.Join(tools, ","),
+		"--disallowedTools", strings.Join(DeniedTools, ","),
 		"--add-dir", c.OutDir,
 	)
 	cmd.Dir = c.Dir

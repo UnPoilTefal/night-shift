@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +161,23 @@ func TestInvokesHeadlessImplementWithBriefOnStdin(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(args, " "), "brief") {
 		t.Fatalf("le brief ne doit pas passer en argument : %q", args)
+	}
+}
+
+func TestIrreversibleActionsStayDeniedWhateverTheOptInAllows(t *testing.T) {
+	r := launch(t, "noop", func(c *claude.Claude) { c.AllowedTools = []string{"Bash(gh *)", "Bash(glab *)", "Bash(git *)"} })
+
+	args := strings.Split(strings.TrimSpace(r.file(t, "args")), "\n")
+	i := slices.Index(args, "--disallowedTools")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("arguments = %q, attendu --disallowedTools", args)
+	}
+	denied := strings.Split(args[i+1], ",")
+	// E1 push sur la branche par défaut, E2 édition d'un corps, E3 fusion.
+	for _, want := range []string{"Bash(git push*)", "Bash(gh issue edit*)", "Bash(gh pr edit*)", "Bash(glab issue update*)", "Bash(glab mr update*)", "Bash(gh pr merge*)", "Bash(glab mr merge*)"} {
+		if !slices.Contains(denied, want) {
+			t.Errorf("refus = %q, attendu %s", denied, want)
+		}
 	}
 }
 
