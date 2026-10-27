@@ -96,7 +96,7 @@ func TestResultRoundTripKeepsPatchOrder(t *testing.T) {
 		patches = append(patches, []byte(strings.Repeat("x", i+1)))
 	}
 	want := harness.Result{Outcome: harness.Succeeded, Reason: "ok", Agent: "claude", Patches: patches,
-		CostUSD: 0.5, Duration: time.Minute, SessionID: "s", Transcript: "/t/s.jsonl"}
+		CostUSD: 0.5, Duration: time.Minute, SessionID: "s", Transcript: harness.TranscriptFile}
 	if err := d.WriteResult(want); err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +104,119 @@ func TestResultRoundTripKeepsPatchOrder(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	if len(got.Patches) != 12 || string(got.Patches[11]) != strings.Repeat("x", 12) || got.Duration != time.Minute || got.Transcript != "/t/s.jsonl" {
+	if len(got.Patches) != 12 || string(got.Patches[11]) != strings.Repeat("x", 12) || got.Duration != time.Minute || got.Transcript != harness.TranscriptFile {
 		t.Fatalf("résultat relu = %+v", got)
+	}
+}
+
+func TestResultIgnoresATranscriptPathChosenByTheAgent(t *testing.T) {
+	for _, path := range []string{"/transcripts/autre.jsonl", "../../state/task.json", "out/transcript.jsonl"} {
+		d := dirs(t)
+		if err := d.WriteResult(harness.Result{Outcome: harness.Stopped, SessionID: "s", Transcript: path}); err != nil {
+			t.Fatal(err)
+		}
+		got, _, err := d.ReadResult()
+		if err != nil || got.Transcript != "" {
+			t.Fatalf("%q : transcript relu = %q, %v ; attendu aucun", path, got.Transcript, err)
+		}
+	}
+}
+
+// withTranscript écrit un résultat qui renvoie au transcript, de contenu
+// donné.
+func withTranscript(t *testing.T, content []byte) stage.Dirs {
+	t.Helper()
+	d := dirs(t)
+	if err := d.WriteResult(harness.Result{Outcome: harness.Stopped, SessionID: "s", Transcript: harness.TranscriptFile}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.OutDir(), harness.TranscriptFile), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func readResult(t *testing.T, d stage.Dirs) harness.Result {
+	t.Helper()
+	res, _, err := d.ReadResult()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func TestTranscriptIsArchivedAsIsUnderANameFromTheTask(t *testing.T) {
+	d := withTranscript(t, []byte("{\"type\":\"user\"}\n"))
+	archive := t.TempDir()
+	task := harness.Task{Ticket: forge.Ticket{Repo: "group/sub/../a", Number: 7}, PassID: "pass-20261027T020000Z", Round: 2}
+
+	path, err := d.ArchiveTranscript(readResult(t, d), task, archive)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(archive, "pass-20261027T020000Z", "group_sub_.._a-7-round2.jsonl"); path != want {
+		t.Fatalf("archive = %q, attendu %q", path, want)
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != "{\"type\":\"user\"}\n" {
+		t.Fatalf("archive = %q, %v ; attendu la copie telle quelle", b, err)
+	}
+	if _, err := d.ArchiveTranscript(readResult(t, d), task, archive); err == nil {
+		t.Fatal("une archive existante a été écrasée")
+	}
+}
+
+func TestTranscriptArchiveRefusesWhatIsNotAPlainBoundedFile(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(secret, []byte("ghp_secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	task := harness.Task{Ticket: forge.Ticket{Repo: "o/a", Number: 7}, PassID: "pass-1"}
+	for name, d := range map[string]stage.Dirs{
+		"trop gros": withTranscript(t, make([]byte, harness.MaxTranscriptBytes+1)),
+		"lien": func() stage.Dirs {
+			d := withTranscript(t, nil)
+			p := filepath.Join(d.OutDir(), harness.TranscriptFile)
+			if err := os.Remove(p); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(secret, p); err != nil {
+				t.Fatal(err)
+			}
+			return d
+		}(),
+		"absent": func() stage.Dirs {
+			d := withTranscript(t, nil)
+			if err := os.Remove(filepath.Join(d.OutDir(), harness.TranscriptFile)); err != nil {
+				t.Fatal(err)
+			}
+			return d
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			archive := t.TempDir()
+			path, err := d.ArchiveTranscript(readResult(t, d), task, archive)
+			if err == nil || path != "" {
+				t.Fatalf("archive = %q, %v ; attendu un refus", path, err)
+			}
+			if strings.Contains(err.Error(), "ghp_secret") {
+				t.Fatal("le contenu de la cible fuit dans l'erreur")
+			}
+			if entries, _ := os.ReadDir(filepath.Join(archive, "pass-1")); len(entries) != 0 {
+				t.Fatalf("archive laissée après un refus : %v", entries)
+			}
+		})
+	}
+}
+
+func TestMissingTranscriptIsAnIncidentOnlyWhenASessionRan(t *testing.T) {
+	task := harness.Task{Ticket: forge.Ticket{Repo: "o/a", Number: 7}, PassID: "pass-1"}
+	d := dirs(t)
+	if path, err := d.ArchiveTranscript(harness.Result{Outcome: harness.Failed}, task, t.TempDir()); err != nil || path != "" {
+		t.Fatalf("agent non démarré : %q, %v ; attendu rien à archiver", path, err)
+	}
+	if _, err := d.ArchiveTranscript(harness.Result{Outcome: harness.Stopped, SessionID: "s"}, task, t.TempDir()); err == nil || !strings.Contains(err.Error(), "absent") {
+		t.Fatalf("session sans transcript : %v, attendu un incident", err)
 	}
 }
 

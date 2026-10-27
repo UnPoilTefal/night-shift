@@ -15,8 +15,10 @@
 #                                          brouillon et le ticket à un humain
 #
 # Il n'y a jamais de troisième tour. Le jeton de forge n'est monté que dans
-# select et les deux publish, le webhook Discord que dans ces derniers ; un
-# test du dépôt (examples/solo) le vérifie. Le jeton doit pouvoir lire les
+# select et les deux publish, le webhook Discord que dans ces derniers. Les
+# étapes agent ne montent aucun volume persistant : chaque tour a sa propre
+# configuration, et son transcript passe par sa sortie avant que publish ne
+# l'archive. Un test du dépôt (examples/solo) le vérifie. Le jeton doit pouvoir lire les
 # checks et les statuts de commit du dépôt. Le
 # proxy de sortie doit laisser publish joindre discord.com pour la
 # notification. Les images, le proxy de sortie, la politique
@@ -82,19 +84,21 @@ spec:
                 - name: CLAUDE_CODE_OAUTH_TOKEN
                   valueFrom:
                     secretKeyRef: {name: night-shift-model, key: token}
-                - {name: CLAUDE_CONFIG_DIR, value: /transcripts}
+                # Configuration de l'agent neuve à chaque tour : rien de ce
+                # qu'il y écrit (hooks, instructions) ne sert à un autre tour.
+                - {name: CLAUDE_CONFIG_DIR, value: /agent-config}
                 - {name: HOME, value: /tmp}
               volumeMounts:
                 - {name: state, mountPath: /state, readOnly: true}
                 - {name: work, mountPath: /work}
-                - {name: transcripts, mountPath: /transcripts}
+                - {name: agent-config, mountPath: /agent-config}
                 - {name: tmp, mountPath: /tmp}
               securityContext: *hardened
             - name: publish
               image: ghcr.io/unpoiltefal/night-shift:latest
               command: ["night-shift"]
               args: ["publish", "--state", "/state", "--work", "/work", "--ci-timeout", "10m",
-                     "--next-state", "/state2", "--next-work", "/work2"]
+                     "--next-state", "/state2", "--next-work", "/work2", "--transcripts", "/transcripts"]
               env: &publishEnv
                 - name: NIGHT_SHIFT_GITHUB_TOKEN
                   valueFrom:
@@ -112,6 +116,7 @@ spec:
                 - {name: work, mountPath: /work, readOnly: true}
                 - {name: state2, mountPath: /state2}
                 - {name: work2, mountPath: /work2}
+                - {name: transcripts, mountPath: /transcripts}
                 - {name: tmp, mountPath: /tmp}
               securityContext: *hardened
             - name: retry-agent
@@ -122,18 +127,20 @@ spec:
               volumeMounts:
                 - {name: state2, mountPath: /state2, readOnly: true}
                 - {name: work2, mountPath: /work2}
-                - {name: transcripts, mountPath: /transcripts}
+                - {name: retry-agent-config, mountPath: /agent-config}
                 - {name: tmp, mountPath: /tmp}
               securityContext: *hardened
           containers:
             - name: retry-publish
               image: ghcr.io/unpoiltefal/night-shift:latest
               command: ["night-shift"]
-              args: ["publish", "--follow-up", "--state", "/state2", "--work", "/work2", "--ci-timeout", "10m"]
+              args: ["publish", "--follow-up", "--state", "/state2", "--work", "/work2", "--ci-timeout", "10m",
+                     "--transcripts", "/transcripts"]
               env: *publishEnv
               volumeMounts:
                 - {name: state2, mountPath: /state2, readOnly: true}
                 - {name: work2, mountPath: /work2, readOnly: true}
+                - {name: transcripts, mountPath: /transcripts}
                 - {name: tmp, mountPath: /tmp}
               securityContext: *hardened
           volumes:
@@ -143,7 +150,11 @@ spec:
             - {name: state2, emptyDir: {}}
             - {name: work2, emptyDir: {}}
             - {name: tmp, emptyDir: {}}
-            # Transcripts réservés à l'agent, conservés 30 jours par le
+            # Configuration de l'agent, une par tour.
+            - {name: agent-config, emptyDir: {}}
+            - {name: retry-agent-config, emptyDir: {}}
+            # Archive des transcripts, écrite par les seules étapes publish,
+            # qui y copient celui de chaque tour ; conservée 30 jours par le
             # déploiement.
             - name: transcripts
               persistentVolumeClaim: {claimName: night-shift-transcripts}

@@ -108,6 +108,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] CI rounds: the pass follows the draft PR's CI and relaunches the agent once on failing checks, never a third time ([#9](https://github.com/UnPoilTefal/night-shift/issues/9))
 - [x] Zone refusal: Publication checks every commit against the base branch's opt-in before each push, so the opt-in file is the only thing a target repository needs ([#67](https://github.com/UnPoilTefal/night-shift/issues/67), [ADR 0011](docs/adr/0011-publication-frontiere-des-zones.md))
 - [x] Replayable zone-refusal proof against a real forge: `make e9-replay` replays the attack that led to it on a sandbox repository ([#75](https://github.com/UnPoilTefal/night-shift/issues/75))
+- [x] Agent configuration fresh on every round, transcripts archived by the trusted steps only ([#104](https://github.com/UnPoilTefal/night-shift/issues/104))
 - [ ] Outcomes and weekly digest ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
@@ -152,9 +153,9 @@ CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state --work /work --ti
 #    until every check has stayed completed for --ci-settle (1m), so a slow workflow is not missed.
 #    Green: hand the ticket back in an explicit state, then publish the digest.
 #    Red: prepare the retry in /state2 and /work2 instead (fresh clone of the branch, failing checks).
-#    NIGHT_SHIFT_DISCORD_WEBHOOK is optional.
+#    NIGHT_SHIFT_DISCORD_WEBHOOK is optional. --transcripts archives the round's transcript (see below).
 NIGHT_SHIFT_GITHUB_TOKEN=… NIGHT_SHIFT_DISCORD_WEBHOOK=… ./night-shift publish --state /state --work /work \
-  --next-state /state2 --next-work /work2
+  --next-state /state2 --next-work /work2 --transcripts /transcripts
 
 # 4. Retry (no forge token): the agent adds fixing commits on top of the published branch.
 #    With no retry prepared, it does nothing.
@@ -162,7 +163,7 @@ CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state2 --work /work2 --
 
 # 5. Retry publication: push on the same PR, wait for CI, hand the ticket back and publish the digest.
 #    With no retry prepared, the first publication already did, and it does nothing.
-NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift publish --follow-up --state /state2 --work /work2
+NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift publish --follow-up --state /state2 --work /work2 --transcripts /transcripts
 ```
 
 `select`, `publish` and `pass` take `--forge <name>` to choose the forge adapter: `github` (the default, so existing deployments need no change) or `gitlab`. Without more options, a step talks to the public forge. For a dedicated or self-managed instance, give its base address with `--instance`, for example `--instance https://gitlab.example.com`. The adapter derives both the API and the clone addresses from that one base, so the token can never be sent to another host. `--api-url` and `--git-url` remain for a topology that `--instance` cannot describe: they must be given together, never with `--instance`. An unknown name, a badly formed `--repo` or inconsistent addresses are usage errors (exit code 2), raised before any network call. The task records the forge that reserved it, and `publish` refuses a task reserved on another forge. Whatever the forge, the agent step refuses to start when any variable of any registered adapter carries a token.
@@ -199,7 +200,9 @@ Each ticket gets a summary comment: what was done, cost, duration and its provis
 - **Incidents**: if part of the pass fails (a reservation, a clone), `select` records it instead of exiting, so the pod still reaches publication. The digest counts the incidents without their details, then `publish` exits with an error so that the job shows the failure.
 - **Discord notification** (optional): it holds only counters (tickets, zone refusals, triage, incidents, repositories left out or unreachable) and links to the digest issues; it never names a repository left out, never carries an error message or ticket content, and mentions nobody. The egress proxy must let `publish` reach `discord.com`. Without a webhook, the pass still succeeds and the digest says the notification is not configured. If the webhook fails, the digest issues get a comment saying so.
 
-[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment, and [`cronjob-gitlab.yaml`](examples/solo/cronjob-gitlab.yaml) the same on GitLab ([guide](docs/gitlab.md)): a `CronJob` whose pod runs `select`, `agent`, `publish` and `retry-agent` as init containers and `retry-publish` as its container, with the forge token and the Discord webhook mounted only in the trusted steps. Its deadline (90 minutes) covers two agent rounds of 30 minutes and two CI waits of 10 minutes. A test in the repository keeps both variants that way, and fails if a forge token reaches an agent step. The egress proxy and transcript retention belong to your deployment. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
+[`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment, and [`cronjob-gitlab.yaml`](examples/solo/cronjob-gitlab.yaml) the same on GitLab ([guide](docs/gitlab.md)): a `CronJob` whose pod runs `select`, `agent`, `publish` and `retry-agent` as init containers and `retry-publish` as its container, with the forge token and the Discord webhook mounted only in the trusted steps. Its deadline (90 minutes) covers two agent rounds of 30 minutes and two CI waits of 10 minutes. A test in the repository keeps both variants that way, and fails if a forge token reaches an agent step or if an agent step mounts a persistent volume. The egress proxy and transcript retention belong to your deployment.
+
+**Transcripts.** Each agent round gets a fresh Claude Code configuration (`CLAUDE_CONFIG_DIR` on its own `emptyDir`), so nothing a round writes there (hooks in `settings.json`, instructions, skills) ever runs in another round, another ticket or another pass ([#104](https://github.com/UnPoilTefal/night-shift/issues/104)). At the end of the round, the agent step copies the session transcript into its output as `transcript.jsonl`, up to 50 MiB. `publish --transcripts <dir>` then copies it as is, without reading it, to `<dir>/<pass>/<repo>-<ticket>-round<n>.jsonl`. That name comes from the task, never from the agent, and an existing archive is never overwritten. Only the `publish` steps mount the archive, so an agent can neither plant configuration for a later pass nor rewrite a past transcript. A missing or oversized transcript does not stop publication: the digest counts it as an incident. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
 
 ### Container images
 

@@ -195,6 +195,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	var next stage.Dirs
 	fs.StringVar(&next.State, "next-state", "", "volume de la tâche du tour de relance, que publish écrit si la CI échoue")
 	fs.StringVar(&next.Work, "next-work", "", "volume de travail du tour de relance")
+	transcripts := fs.String("transcripts", "", "dossier d'archive des transcripts, monté par les seules étapes de confiance ; sans lui, aucun transcript n'est conservé")
 	followUp := fs.Bool("follow-up", false, "publie un tour de relance : sans tâche, le tour précédent a déjà rendu le ticket et publié le digest")
 	ciTimeout := fs.Duration("ci-timeout", pass.DefaultCITimeout, "durée maximale de l'attente de la CI de la PR")
 	ciPoll := fs.Duration("ci-poll", pass.DefaultCIPoll, "intervalle entre deux lectures de la CI")
@@ -230,7 +231,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	}
 	if !ok {
 		_, _ = fmt.Fprintln(stdout, "aucun ticket réservé, rien à publier")
-		return publishDigest(ctx, f, d, nil, stdout, stderr)
+		return publishDigest(ctx, f, d, nil, nil, stdout, stderr)
 	}
 
 	res, ok, err := d.ReadResult()
@@ -240,6 +241,18 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	case !ok:
 		res = harness.Result{Outcome: harness.Failed, Reason: "l'agent n'a rendu aucun résultat : passe interrompue (durée maximale ou arrêt du conteneur)"}
 	}
+	// Le transcript est archivé avant tout rendu ; un échec n'arrête pas la
+	// Publication, le digest le compte comme incident.
+	var incidents []string
+	archived := ""
+	if *transcripts != "" {
+		archived, err = d.ArchiveTranscript(res, task, *transcripts)
+		if err != nil {
+			incidents = append(incidents, fmt.Sprintf("archive du transcript de %s#%d, tour %d : %v", task.Ticket.Repo, task.Ticket.Number, max(task.Round, 1), err))
+			_, _ = fmt.Fprintf(stderr, "publish : %s\n", incidents[len(incidents)-1])
+		}
+	}
+	res.Transcript = archived
 
 	cfg := pass.Config{ID: task.PassID, Now: time.Now, Rounds: 1, CI: pass.CIWait{Timeout: *ciTimeout, Poll: *ciPoll, Settle: *ciSettle}}
 	if next.State != "" {
@@ -248,7 +261,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	remote := gitrepo.Remote{GitAccess: f.GitAccess(task.TargetRepo), Token: token}
 	fu := pass.Follow(ctx, cfg, f, publication.Git{Code: f, Token: token}, task, res)
 	if fu.Retry {
-		perr := prepareRetry(ctx, *d, next, remote, fu.Next)
+		perr := prepareRetry(ctx, *d, next, remote, fu.Next, incidents)
 		if perr == nil {
 			_, _ = fmt.Fprintf(stdout, "ticket %s#%d : CI rouge (%d check(s) en échec), relance de l'agent au tour %d\n",
 				task.Ticket.Repo, task.Ticket.Number, len(fu.Next.CIFailures), fu.Next.Round)
@@ -268,7 +281,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	printTickets(stdout, []pass.TicketReport{tr})
-	if code := publishDigest(ctx, f, d, &tr, stdout, stderr); code != 0 || err != nil {
+	if code := publishDigest(ctx, f, d, &tr, incidents, stdout, stderr); code != 0 || err != nil {
 		return 1
 	}
 	return 0
@@ -277,8 +290,8 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 // prepareRetry prépare la relance de l'agent dans les volumes next : un
 // clone neuf, sans jeton, sur la tête de la branche publiée, la tâche du tour
 // suivant et le rapport de la sélection, que la dernière Publication
-// complétera pour le digest.
-func prepareRetry(ctx context.Context, d, next stage.Dirs, remote gitrepo.Remote, task harness.Task) error {
+// complétera pour le digest, avec les incidents de ce tour.
+func prepareRetry(ctx context.Context, d, next stage.Dirs, remote gitrepo.Remote, task harness.Task, incidents []string) error {
 	if _, _, err := remote.Clone(ctx, next.RepoDir()); err != nil {
 		return err
 	}
@@ -293,6 +306,7 @@ func prepareRetry(ctx context.Context, d, next stage.Dirs, remote gitrepo.Remote
 		return err
 	}
 	if ok {
+		report.Errors = append(report.Errors, incidents...)
 		if err := next.WriteReport(report); err != nil {
 			return err
 		}

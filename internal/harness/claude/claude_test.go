@@ -20,6 +20,8 @@ type run struct {
 	res harness.Result
 	err error
 	log string
+	// out est la sortie de l'étape.
+	out string
 }
 
 func (r run) file(t *testing.T, name string) string {
@@ -73,7 +75,7 @@ func launchTask(t *testing.T, mode string, edit func(*claude.Claude), task harne
 		edit(&c)
 	}
 	res, err := c.Run(context.Background(), task)
-	return run{res: res, err: err, log: log}
+	return run{res: res, err: err, log: log, out: c.OutDir}
 }
 
 func TestCommitsBecomeAPatchSeries(t *testing.T) {
@@ -92,8 +94,50 @@ func TestCommitsBecomeAPatchSeries(t *testing.T) {
 	if res.CostUSD != 0.25 || res.SessionID != "s-1" || res.Duration != 1234*time.Millisecond || res.Agent != "claude" {
 		t.Fatalf("compte rendu = %+v", res)
 	}
-	if !strings.HasSuffix(res.Transcript, filepath.Join("projects", "repo", "s-1.jsonl")) {
-		t.Fatalf("transcript = %q", res.Transcript)
+	if res.Transcript != harness.TranscriptFile {
+		t.Fatalf("transcript = %q, attendu %q dans la sortie de l'étape", res.Transcript, harness.TranscriptFile)
+	}
+	if b, err := os.ReadFile(filepath.Join(r.out, harness.TranscriptFile)); err != nil || string(b) != "{}\n" {
+		t.Fatalf("copie du transcript = %q, %v", b, err)
+	}
+}
+
+func TestTranscriptCopyIsCappedAndReplacesWhatTheAgentLeft(t *testing.T) {
+	for name, c := range map[string]struct {
+		transcript string
+		want       string
+	}{
+		"absent":    {"none", ""},
+		"trop gros": {"big", ""},
+		"ordinaire": {"", harness.TranscriptFile},
+	} {
+		t.Run(name, func(t *testing.T) {
+			planted := filepath.Join(t.TempDir(), "elsewhere")
+			r := launch(t, "commit", func(cl *claude.Claude) {
+				cl.Env = append(cl.Env, "FAKE_CLAUDE_TRANSCRIPT="+c.transcript)
+				// L'agent a laissé un lien sous le nom du transcript.
+				if err := os.Symlink(planted, filepath.Join(cl.OutDir, harness.TranscriptFile)); err != nil {
+					t.Fatal(err)
+				}
+			})
+
+			if r.err != nil || r.res.Transcript != c.want {
+				t.Fatalf("transcript = %q, %v ; attendu %q", r.res.Transcript, r.err, c.want)
+			}
+			if _, err := os.Stat(planted); err == nil {
+				t.Fatal("la copie a suivi le lien laissé par l'agent")
+			}
+			fi, err := os.Lstat(filepath.Join(r.out, harness.TranscriptFile))
+			if c.want == "" {
+				if err == nil && fi.Size() > harness.MaxTranscriptBytes {
+					t.Fatal("un transcript au-delà du plafond a été copié")
+				}
+				return
+			}
+			if err != nil || !fi.Mode().IsRegular() {
+				t.Fatalf("copie = %v, %v ; attendu un fichier ordinaire", fi, err)
+			}
+		})
 	}
 }
 
@@ -153,6 +197,11 @@ func TestTimeoutIsAFailureThatMentionsTheInterruption(t *testing.T) {
 	}
 	if time.Since(start) > 5*time.Second {
 		t.Fatal("l'agent n'a pas été interrompu à temps")
+	}
+	// Sans identifiant de session, le seul transcript du dossier neuf est
+	// celui du tour.
+	if r.res.Transcript != harness.TranscriptFile {
+		t.Fatalf("transcript = %q, attendu la copie malgré l'interruption", r.res.Transcript)
 	}
 }
 

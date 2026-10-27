@@ -601,3 +601,74 @@ func TestRedCIAfterTheRetryLeavesTheDraftToAHuman(t *testing.T) {
 		t.Fatalf("PR = %d, digests = %d", len(w.gh.pulls), len(w.gh.digests))
 	}
 }
+
+func TestEachRoundTranscriptIsArchivedByTheTrustedStage(t *testing.T) {
+	w := newWorld(t)
+	w.gh.red = 1
+	archive := t.TempDir()
+
+	w.selectStage(t)
+	w.agentStage(t, "commit")
+	w.publishStage(t, "--next-state", w.state2, "--next-work", w.work2, "--transcripts", archive)
+	w.agentOn(t, "fix", w.state2, w.work2)
+	stdout := w.publishStage(t, "--follow-up", "--state", w.state2, "--work", w.work2, "--transcripts", archive)
+
+	passes, err := os.ReadDir(archive)
+	if err != nil || len(passes) != 1 || !strings.HasPrefix(passes[0].Name(), "pass-") {
+		t.Fatalf("archive = %v, %v ; attendu un dossier par passe", passes, err)
+	}
+	for _, n := range []string{"o_a-7-round1.jsonl", "o_a-7-round2.jsonl"} {
+		b, err := os.ReadFile(filepath.Join(archive, passes[0].Name(), n))
+		if err != nil || string(b) != "{}\n" {
+			t.Fatalf("%s = %q, %v ; attendu le transcript du tour", n, b, err)
+		}
+	}
+	if body := fmt.Sprint(w.gh.digests[0]["body"]); strings.Contains(body, "incident") {
+		t.Fatalf("digest = %q, attendu aucun incident", body)
+	}
+	if !strings.Contains(stdout, "succeeded") {
+		t.Fatalf("rapport = %q", stdout)
+	}
+}
+
+func TestMissingTranscriptIsAnIncidentThatDoesNotStopThePublication(t *testing.T) {
+	w := newWorld(t)
+	archive := t.TempDir()
+	t.Setenv("FAKE_CLAUDE_TRANSCRIPT", "none")
+
+	w.selectStage(t)
+	w.agentStage(t, "commit")
+	t.Setenv(cli.TokenEnv, secret)
+	code, _, stderr := run("publish", "--api-url", w.api, "--git-url", w.remote.Base, "--ci-timeout", "200ms", "--ci-poll", "1ms", "--ci-settle", "2ms",
+		"--state", w.state, "--work", w.work, "--transcripts", archive)
+
+	if code != 1 || !strings.Contains(stderr, "transcript") {
+		t.Fatalf("publish : code = %d, attendu 1 pour signaler l'incident\n%s", code, stderr)
+	}
+	if len(w.gh.pulls) != 1 || len(w.lifecycle()) != 0 {
+		t.Fatalf("PR = %d, labels = %v ; attendu la PR publiée et le ticket rendu", len(w.gh.pulls), w.lifecycle())
+	}
+	if len(w.gh.digests) != 1 || !strings.Contains(fmt.Sprint(w.gh.digests[0]["body"]), "1 incident") {
+		t.Fatalf("digests = %v, attendu l'incident compté", w.gh.digests)
+	}
+}
+
+func TestMissingTranscriptOnTheFirstRoundReachesTheFinalDigest(t *testing.T) {
+	w := newWorld(t)
+	w.gh.red = 1
+	archive := t.TempDir()
+
+	w.selectStage(t)
+	t.Setenv("FAKE_CLAUDE_TRANSCRIPT", "none")
+	w.agentStage(t, "commit")
+	w.publishStage(t, "--next-state", w.state2, "--next-work", w.work2, "--transcripts", archive)
+	t.Setenv("FAKE_CLAUDE_TRANSCRIPT", "")
+	w.agentOn(t, "fix", w.state2, w.work2)
+	t.Setenv(cli.TokenEnv, secret)
+	code, _, _ := run("publish", "--api-url", w.api, "--git-url", w.remote.Base, "--ci-timeout", "200ms", "--ci-poll", "1ms", "--ci-settle", "2ms",
+		"--follow-up", "--state", w.state2, "--work", w.work2, "--transcripts", archive)
+
+	if code != 1 || len(w.gh.digests) != 1 || !strings.Contains(fmt.Sprint(w.gh.digests[0]["body"]), "1 incident") {
+		t.Fatalf("code = %d, digests = %v ; attendu l'incident du premier tour au digest", code, w.gh.digests)
+	}
+}

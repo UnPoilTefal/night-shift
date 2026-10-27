@@ -6,7 +6,8 @@
 //     la sélection : l'agent ne peut changer ni le ticket que la Publication
 //     rendra, ni le digest qu'elle publiera ;
 //   - Work porte le clone (repo/) que l'agent modifie, et sa sortie (out/) :
-//     result.json et la série patches/NNNN.patch.
+//     result.json, la série patches/NNNN.patch et le transcript de la
+//     session, que les étapes de confiance archivent (ArchiveTranscript).
 //
 // Tout ce qui vient de Work est écrit par l'agent : ReadResult le traite en
 // donnée non fiable (fichiers ordinaires seulement, tailles bornées).
@@ -162,7 +163,12 @@ func (d Dirs) ReadResult() (harness.Result, bool, error) {
 	}
 	res := harness.Result{
 		Outcome: r.Outcome, Reason: truncate(r.Reason, MaxReason), Agent: truncate(r.Agent, 100),
-		CostUSD: r.CostUSD, Duration: r.Duration, SessionID: truncate(r.SessionID, 200), Transcript: truncate(r.Transcript, 500),
+		CostUSD: r.CostUSD, Duration: r.Duration, SessionID: truncate(r.SessionID, 200),
+	}
+	// Le transcript n'a qu'un nom possible : aucun chemin rendu par l'agent
+	// n'est suivi.
+	if r.Transcript == harness.TranscriptFile {
+		res.Transcript = r.Transcript
 	}
 	if !slices.Contains([]harness.Outcome{harness.Succeeded, harness.NeedsInfo, harness.Stopped, harness.Failed}, res.Outcome) {
 		res.Outcome, res.Reason = harness.Failed, fmt.Sprintf("issue %q inconnue rendue par l'agent", truncate(string(r.Outcome), 50))
@@ -198,6 +204,58 @@ func (d Dirs) ReadResult() (harness.Result, bool, error) {
 	return res, true, nil
 }
 
+// ArchiveTranscript copie tel quel le transcript rendu par l'agent dans le
+// dossier d'archive, monté par les seules étapes de confiance, et rend son
+// chemin. Le nom de l'archive vient de la tâche, écrite par une étape de
+// confiance : passe, ticket et tour, jamais du contenu de l'agent. Une
+// archive existante n'est pas écrasée. Sans transcript, il rend "" ; err
+// signale un transcript annoncé mais refusé, ou une archive impossible.
+func (d Dirs) ArchiveTranscript(res harness.Result, task harness.Task, archive string) (string, error) {
+	if res.Transcript == "" {
+		if res.SessionID != "" {
+			return "", fmt.Errorf("transcript de la session %s absent de la sortie de l'agent (introuvable ou au-delà de %d octets)", res.SessionID, harness.MaxTranscriptBytes)
+		}
+		return "", nil
+	}
+	src, err := openRegular(filepath.Join(d.OutDir(), harness.TranscriptFile), harness.MaxTranscriptBytes)
+	if err != nil {
+		return "", fmt.Errorf("transcript refusé : %w", err)
+	}
+	defer func() { _ = src.Close() }()
+	dir := filepath.Join(archive, safeName(task.PassID))
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return "", err
+	}
+	dst := filepath.Join(dir, fmt.Sprintf("%s-%d-round%d.jsonl", safeName(task.Ticket.Repo), task.Ticket.Number, max(task.Round, 1)))
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- nom construit ici depuis la tâche
+	if err != nil {
+		return "", err
+	}
+	n, err := io.Copy(out, io.LimitReader(src, harness.MaxTranscriptBytes+1))
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil && n > harness.MaxTranscriptBytes {
+		err = fmt.Errorf("transcript au-delà de %d octets", harness.MaxTranscriptBytes)
+	}
+	if err != nil {
+		_ = os.Remove(dst)
+		return "", err
+	}
+	return dst, nil
+}
+
+var unsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// safeName rend s utilisable comme un seul composant de chemin.
+func safeName(s string) string {
+	s = unsafeChars.ReplaceAllString(s, "_")
+	if s == "" || s == "." || s == ".." {
+		return "_"
+	}
+	return s
+}
+
 // realDir vérifie que path est un dossier, et non un lien symbolique.
 func realDir(path string) error {
 	fi, err := os.Lstat(path)
@@ -213,6 +271,17 @@ func realDir(path string) error {
 // readRegular lit un fichier ordinaire, sans suivre de lien symbolique, d'au
 // plus limit octets.
 func readRegular(path string, limit int64) ([]byte, error) {
+	f, err := openRegular(path, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(io.LimitReader(f, limit))
+}
+
+// openRegular ouvre un fichier ordinaire, sans suivre de lien symbolique,
+// d'au plus limit octets à l'ouverture ; la lecture reste à borner.
+func openRegular(path string, limit int64) (*os.File, error) {
 	fi, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -227,8 +296,7 @@ func readRegular(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s : ouverture refusée", filepath.Base(path))
 	}
-	defer func() { _ = f.Close() }()
-	return io.ReadAll(io.LimitReader(f, limit))
+	return f, nil
 }
 
 func truncate(s string, n int) string {
