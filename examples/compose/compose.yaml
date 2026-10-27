@@ -1,0 +1,283 @@
+# Exemple Docker Compose du palier solo (ADR 0013) : les mêmes étapes du
+# même binaire que le CronJob d'examples/solo, en services permanents d'un
+# hôte Docker unique, qui se passent la main en mode relais (#108).
+#
+#   control        déclenche les passes (échéance, control trigger), une à la
+#                  fois, et tient l'historique ; aucun jeton de forge ni de
+#                  modèle
+#   select         réclame une passe à control, réserve un ticket, prépare le
+#                  clone (jeton de forge)
+#   agent          claude -p sur le clone, sans jeton de forge, sortie par le
+#                  seul proxy ; PID 1, il ne laisse rien d'un tour à l'autre
+#   publish        PR en brouillon, attente de la CI, rendu ou relance
+#   retry-agent    relance de l'agent sur les checks en échec
+#   retry-publish  publication de la relance
+#   proxy          Squid, liste d'autorisation par fichier (allowlist/)
+#
+# Réseaux : les agents ne sont que sur agent-net, interne et sans adresse sur
+# l'hôte ; seul le proxy les relie à l'extérieur. control-net, interne, ne
+# relie que control et les étapes de confiance. admin-net ne sert qu'à
+# publier l'API d'administration de control sur 127.0.0.1.
+#
+# Configuration (variables lues par Compose, par exemple dans un fichier .env
+# à côté de ce fichier) :
+#   NIGHT_SHIFT_REPO         dépôt candidat (requis), owner/repo ou
+#                            group/subgroup/project
+#   NIGHT_SHIFT_FORGE        github (défaut) ou gitlab
+#   NIGHT_SHIFT_INSTANCE     instance dédiée ou auto-hébergée, par exemple
+#                            https://gitlab.example.com ; vide pour la forge
+#                            publique
+#   NIGHT_SHIFT_SCHEDULE     échéance cron des passes (défaut 0 2 * * *, UTC)
+#   NIGHT_SHIFT_VERSION      étiquette des images (défaut dev : make images)
+#   NIGHT_SHIFT_SECRETS_DIR  dossier des secrets (défaut ./secrets)
+#
+# Le mode relais n'existe pas dans la release 0.2.0 : en attendant la
+# suivante, construisez les images depuis main (make images, étiquette dev).
+# Un test du dépôt (compose_test.go) refuse toute modification qui affaiblit
+# une garantie. Guide : docs/compose.md.
+
+name: night-shift
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-select-env: &selectEnv
+  # Le jeton de la forge choisie : chaque adaptateur lit sa propre variable.
+  NIGHT_SHIFT_GITHUB_TOKEN_FILE: /run/secrets/forge_token
+  NIGHT_SHIFT_GITLAB_TOKEN_FILE: /run/secrets/forge_token
+  # La racine est en lecture seule : git écrit sous HOME.
+  HOME: /tmp
+  TMPDIR: /tmp
+
+x-publish-env: &publishEnv
+  <<: *selectEnv
+  # Un fichier vide vaut une absence : la passe réussit sans notification.
+  NIGHT_SHIFT_DISCORD_WEBHOOK_FILE: /run/secrets/discord_webhook
+
+x-agent-env: &agentEnv
+  # Abonnement ; pour une clé d'API : --auth api-key et
+  # ANTHROPIC_API_KEY_FILE à la place.
+  CLAUDE_CODE_OAUTH_TOKEN_FILE: /run/secrets/model_token
+  HOME: /home/nightshift
+  CLAUDE_CONFIG_DIR: /agent-config
+  TMPDIR: /tmp
+  HTTPS_PROXY: http://proxy:3128
+  HTTP_PROXY: http://proxy:3128
+  https_proxy: http://proxy:3128
+  http_proxy: http://proxy:3128
+  NO_PROXY: ""
+  no_proxy: ""
+  GOPROXY: https://proxy.golang.org
+
+# Les secrets sont des fichiers de l'hôte, montés en lecture seule sous
+# /run/secrets : ils doivent être lisibles par l'UID 65532 (docs/compose.md).
+# Hors Swarm, Compose ignore uid, gid et mode d'un secret.
+
+x-tmp: &tmp
+  - /tmp:uid=65532,gid=65532,mode=0700
+
+# HOME et CLAUDE_CONFIG_DIR de l'agent : des tmpfs, que l'agent vide après
+# chaque tour ; /tmp aussi. Les tailles bornent ce qu'un tour peut écrire.
+x-agent-tmpfs: &agentTmpfs
+  - /tmp:uid=65532,gid=65532,mode=0700,size=1g
+  - /home/nightshift:uid=65532,gid=65532,mode=0700,size=2g
+  - /agent-config:uid=65532,gid=65532,mode=0700,size=256m
+
+services:
+  control:
+    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-dev}
+    command: ["night-shift", "control", "serve",
+              "--schedule", "${NIGHT_SHIFT_SCHEDULE:-0 2 * * *}",
+              "--listen", ":8080", "--admin-listen", ":8081",
+              "--history", "/history", "--transcripts", "/transcripts",
+              # Au-delà de deux tours d'agent et de deux attentes de CI.
+              "--watchdog", "2h"]
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      NIGHT_SHIFT_CONTROL_TOKEN_FILE: /run/secrets/control_token
+    secrets: [control_token]
+    networks: [control-net, admin-net]
+    # API d'administration, en lecture seule et protégée par le jeton : sur
+    # 127.0.0.1 de l'hôte seulement.
+    ports: ["127.0.0.1:8081:8081"]
+    volumes:
+      - history:/history
+      - transcripts:/transcripts
+    tmpfs:
+      # Demandes de control trigger, propres à ce conteneur.
+      - /run/night-shift:uid=65532,gid=65532,mode=0700
+      - /tmp:uid=65532,gid=65532,mode=0700
+    logging: *logging
+
+  select:
+    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-dev}
+    command: ["night-shift", "select", "--relay", "--control", "http://control:8080", "--round-timeout", "35m",
+              "--forge", "${NIGHT_SHIFT_FORGE:-github}", "--instance", "${NIGHT_SHIFT_INSTANCE:-}",
+              "--repo", "${NIGHT_SHIFT_REPO:?NIGHT_SHIFT_REPO doit nommer le dépôt candidat}",
+              "--state", "/state", "--work", "/work", "--next-state", "/state2", "--next-work", "/work2"]
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment: *selectEnv
+    secrets: [forge_token]
+    networks: [trusted-net, control-net]
+    volumes:
+      - state:/state
+      - work:/work
+      - state2:/state2
+      - work2:/work2
+    tmpfs: *tmp
+    logging: *logging
+
+  agent:
+    # Image d'outils du dépôt cible : night-shift, claude, git et la chaîne
+    # de build (ici Go).
+    image: ghcr.io/unpoiltefal/night-shift-go:${NIGHT_SHIFT_VERSION:-dev}
+    command: ["night-shift", "agent", "--relay", "--state", "/state", "--work", "/work",
+              "--timeout", "30m", "--auth", "subscription"]
+    restart: unless-stopped
+    user: "65532:65532"
+    # L'agent est le PID 1 : après chaque tour, il tue tous les autres
+    # processus du conteneur.
+    init: false
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Réglables selon la chaîne de build du dépôt cible.
+    pids_limit: 512
+    mem_limit: 4g
+    environment: *agentEnv
+    secrets: [model_token]
+    networks: [agent-net]
+    volumes:
+      - state:/state:ro
+      - work:/work
+    tmpfs: *agentTmpfs
+    logging: *logging
+
+  publish:
+    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-dev}
+    command: ["night-shift", "publish", "--relay", "--control", "http://control:8080", "--round-timeout", "35m",
+              "--forge", "${NIGHT_SHIFT_FORGE:-github}", "--instance", "${NIGHT_SHIFT_INSTANCE:-}",
+              "--state", "/state", "--work", "/work", "--ci-timeout", "10m",
+              "--next-state", "/state2", "--next-work", "/work2", "--transcripts", "/transcripts"]
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment: *publishEnv
+    secrets: [forge_token, discord_webhook]
+    networks: [trusted-net, control-net]
+    volumes:
+      - state:/state:ro
+      - work:/work:ro
+      - state2:/state2
+      - work2:/work2
+      - transcripts:/transcripts
+    tmpfs: *tmp
+    logging: *logging
+
+  retry-agent:
+    image: ghcr.io/unpoiltefal/night-shift-go:${NIGHT_SHIFT_VERSION:-dev}
+    command: ["night-shift", "agent", "--relay", "--state", "/state2", "--work", "/work2",
+              "--timeout", "30m", "--auth", "subscription"]
+    restart: unless-stopped
+    user: "65532:65532"
+    init: false
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    mem_limit: 4g
+    environment: *agentEnv
+    secrets: [model_token]
+    networks: [agent-net]
+    volumes:
+      - state2:/state2:ro
+      - work2:/work2
+    tmpfs: *agentTmpfs
+    logging: *logging
+
+  retry-publish:
+    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-dev}
+    command: ["night-shift", "publish", "--relay", "--follow-up", "--control", "http://control:8080", "--round-timeout", "35m",
+              "--forge", "${NIGHT_SHIFT_FORGE:-github}", "--instance", "${NIGHT_SHIFT_INSTANCE:-}",
+              "--state", "/state2", "--work", "/work2", "--ci-timeout", "10m", "--transcripts", "/transcripts"]
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment: *publishEnv
+    secrets: [forge_token, discord_webhook]
+    networks: [trusted-net, control-net]
+    volumes:
+      - state2:/state2:ro
+      - work2:/work2:ro
+      - transcripts:/transcripts
+    tmpfs: *tmp
+    logging: *logging
+
+  proxy:
+    # ubuntu/squid:6.6-24.04_beta, épinglée par le digest de sa liste de
+    # manifestes (amd64, arm64…).
+    image: ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+    restart: unless-stopped
+    # Le point d'entrée de l'image démarre en root, puis Squid passe à
+    # l'utilisateur proxy : seules SETUID et SETGID sont rendues.
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    networks: [agent-net, trusted-net]
+    volumes:
+      - ./squid.conf:/etc/squid/squid.conf:ro
+      - ./allowlist:/etc/squid/allowlist:ro
+    tmpfs:
+      # Écrit par l'utilisateur proxy (13), relu par le point d'entrée, root
+      # sans CAP_DAC_OVERRIDE : le dossier setgid donne ses journaux au
+      # groupe root, pour que docker logs montre les refus.
+      - /var/log/squid:uid=13,gid=0,mode=2750
+      - /var/spool/squid:uid=13,gid=13,mode=0750
+      - /run
+    logging: *logging
+
+networks:
+  agent-net:
+    internal: true
+    driver_opts:
+      # Aucune adresse du réseau sur l'hôte : aucun service de l'hôte n'est
+      # joignable depuis un agent (Engine 28 ou plus).
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  trusted-net: {}
+  control-net:
+    internal: true
+  admin-net: {}
+
+volumes:
+  state: {}
+  work: {}
+  state2: {}
+  work2: {}
+  transcripts: {}
+  history: {}
+
+secrets:
+  forge_token:
+    file: ${NIGHT_SHIFT_SECRETS_DIR:-./secrets}/forge_token
+  discord_webhook:
+    file: ${NIGHT_SHIFT_SECRETS_DIR:-./secrets}/discord_webhook
+  model_token:
+    file: ${NIGHT_SHIFT_SECRETS_DIR:-./secrets}/model_token
+  control_token:
+    file: ${NIGHT_SHIFT_SECRETS_DIR:-./secrets}/control_token

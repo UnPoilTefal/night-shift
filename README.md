@@ -86,7 +86,7 @@ A repository is opened to passes only through an **opt-in** (*Adhésion*): a fil
 
 | Tier | What changes | For whom |
 |---|---|---|
-| **Solo** | A Kubernetes `CronJob`: one pod in steps (selection, agent, publication, then one agent retry if CI fails) | A maintainer and their repositories |
+| **Solo** | A Kubernetes `CronJob`: one pod in steps (selection, agent, publication, then one agent retry if CI fails). Without a cluster, the same steps as a Docker Compose stack on a single host | A maintainer and their repositories |
 | **Team** | One service account per team, trust levels per repository | A team that owns its repositories |
 | **Platform** | A self-service **Kubernetes operator**: a team declares a **Shift** (*Poste*) in its namespace | A platform team offering night-shift to others |
 
@@ -94,7 +94,7 @@ A repository's **trust level** (*palier de confiance*: tickets per pass, draft o
 
 ## Roadmap
 
-Status: **a pass runs a real headless `claude -p` agent on a brief built from trusted authors only, refuses to push any commit that touches a forbidden zone, opens a draft PR on GitHub or a draft merge request on GitLab, follows its CI with at most two agent rounds, and ends with a digest; a weekly issue reads each ticket's outcome back from the forge and reports the delegation rate; images are published on each release.**
+Status: **a pass runs a real headless `claude -p` agent on a brief built from trusted authors only, refuses to push any commit that touches a forbidden zone, opens a draft PR on GitHub or a draft merge request on GitLab, follows its CI with at most two agent rounds, and ends with a digest; a weekly issue reads each ticket's outcome back from the forge and reports the delegation rate; it runs as a Kubernetes `CronJob` or as a Docker Compose stack on a single host; images are published on each release.**
 
 **Solo tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/2))
 
@@ -113,7 +113,8 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Every secret readable from a file (`…_FILE`), so a deployment can keep secrets out of the environment ([#107](https://github.com/UnPoilTefal/night-shift/issues/107))
 - [x] Control service v1: scheduled and manual passes one at a time, watchdog, host-only history behind a read-only API ([#109](https://github.com/UnPoilTefal/night-shift/issues/109), [docs](docs/control.md))
 - [x] Outcomes and weekly digest: `night-shift weekly` reads each ticket's outcome on the forge, reports the delegation rate and flags the trust-level criterion, on GitHub and GitLab ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
-- [ ] Docker Compose example (solo tier, no cluster): the same steps of the same binary on a single Docker host ([spec](https://github.com/UnPoilTefal/night-shift/issues/105), [ADR 0013](docs/adr/0013-exemple-compose-second-systeme-d-execution.md))
+- [x] Docker Compose example (solo tier, no cluster): the same steps of the same binary on a single Docker host, with an embedded egress proxy and a static test of every guarantee ([#110](https://github.com/UnPoilTefal/night-shift/issues/110), [guide](docs/compose.md), [ADR 0013](docs/adr/0013-exemple-compose-second-systeme-d-execution.md))
+- [ ] End-to-end test of the Compose example in CI ([#111](https://github.com/UnPoilTefal/night-shift/issues/111))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
 
@@ -231,7 +232,38 @@ A ticket counts as reserved through the reservation comment of a pass, posted by
 
 **Transcripts.** Each agent round gets a fresh Claude Code configuration (`CLAUDE_CONFIG_DIR` on its own `emptyDir`), so nothing a round writes there (hooks in `settings.json`, instructions, skills) ever runs in another round, another ticket or another pass ([#104](https://github.com/UnPoilTefal/night-shift/issues/104)). At the end of the round, the agent step copies the session transcript into its output as `transcript.jsonl`, up to 50 MiB. `publish --transcripts <dir>` then copies it as is, without reading it, to `<dir>/<pass>/<repo>-<ticket>-round<n>.jsonl`. That name comes from the task, never from the agent, and an existing archive is never overwritten. Only the `publish` steps mount the archive, so an agent can neither plant configuration for a later pass nor rewrite a past transcript. A missing or oversized transcript does not stop publication: the digest counts it as an incident. `./night-shift pass` still runs selection and hand-back in a single process with a stubbed agent, which is handy for trying an opt-in.
 
-**Control service.** `night-shift control serve` is the building block for running passes without Kubernetes. It triggers passes on a cron schedule or on demand (`night-shift control trigger`, no network nor secret), runs one at a time, merges requests received meanwhile into one waiting pass, and closes a pass stuck past its watchdog. It keeps a history that never leaves the host, served by a read-only administration API behind a token, and purges history and archived transcripts after 30 days. It holds no forge or model token and makes no outbound call. The steps do not talk to it yet: the relay mode comes with [#108](https://github.com/UnPoilTefal/night-shift/issues/108). Routes and options are in [`docs/control.md`](docs/control.md).
+**Control service.** `night-shift control serve` is the building block for running passes without Kubernetes. It triggers passes on a cron schedule or on demand (`night-shift control trigger`, no network nor secret), runs one at a time, merges requests received meanwhile into one waiting pass, and closes a pass stuck past its watchdog. It keeps a history that never leaves the host, served by a read-only administration API behind a token, and purges history and archived transcripts after 30 days. It holds no forge or model token and makes no outbound call. The trusted steps talk to it in relay mode. Routes and options are in [`docs/control.md`](docs/control.md).
+
+### Running on Docker Compose
+
+Without a cluster, [`examples/compose/`](examples/compose/) runs the same steps of the same binary as long-lived services on a single Docker host, in relay mode, next to `control` and a Squid egress proxy:
+
+```mermaid
+flowchart LR
+    C["control<br/>schedule, trigger,<br/>history"]
+    subgraph TN["trusted-net + control-net"]
+        S["select<br/>forge token"]
+        U["publish / retry-publish<br/>forge token, webhook"]
+    end
+    subgraph AN["agent-net (internal, isolated)"]
+        A["agent / retry-agent<br/><b>no forge token</b><br/>PID 1, tmpfs only"]
+        X["proxy (Squid)<br/>CONNECT 443<br/>allow-list"]
+    end
+    C <--> S & U
+    S -- "turn.json" --> A
+    A -- "out/, done.json" --> U
+    A --> X --> M["api.anthropic.com,<br/>package registries"]
+    S & U --> F["forge"]
+```
+
+```sh
+cd examples/compose
+# secrets/forge_token, model_token, control_token, discord_webhook (may be empty)
+NIGHT_SHIFT_REPO=owner/repo docker compose up -d
+docker compose exec control night-shift control trigger   # a pass now, besides the schedule
+```
+
+The agents only reach the proxy. The proxy only lets `CONNECT` to port 443 of the listed domains through, and refuses private ranges first. The agents have no persistent volume, and each round they empty their `tmpfs` and kill every process they left. Secrets are files, and the administration API listens on `127.0.0.1` only. A static test keeps every rule, with one failing case per rule, and checks that each option exists in the binary. It needs Docker Engine 28 or later on Linux; Docker Desktop is for trying it. Relay mode came after `0.2.0`, so build the images from `main` (`make images`) until the next release. Setup, allow-lists, private LLM gateway and the remaining gaps from the `CronJob` are in [`docs/compose.md`](docs/compose.md). The end-to-end test in CI is still to come ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)).
 
 ### Container images
 
@@ -312,6 +344,8 @@ Every pull request runs lint, tests, the image build with its smoke test and sec
 Design documents are written in French, using the glossary's French aliases.
 
 - [`docs/opt-in.md`](docs/opt-in.md): the opt-in schema, its conditions, and how to add the optional zone check to a repository's CI.
+- [`docs/compose.md`](docs/compose.md): running the solo tier with Docker Compose, without a cluster.
+- [`docs/control.md`](docs/control.md): the control service and its APIs.
 - [`GLOSSARY.md`](GLOSSARY.md): the glossary. Every term in **bold** in this README is defined there under its canonical English name, with its French alias (shown here in *italics*) used throughout the French design documents.
 - [`docs/adr/`](docs/adr/): architecture decisions, including the alternatives that were rejected.
 - [`docs/agents/`](docs/agents/): configuration for the agents working on this repository.
