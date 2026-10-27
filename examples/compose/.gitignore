@@ -1,0 +1,3 @@
+# Secrets et configuration locale de la stack : jamais versionnés.
+/secrets/
+/.env
