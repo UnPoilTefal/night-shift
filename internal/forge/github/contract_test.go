@@ -41,6 +41,12 @@ type ghIssue struct {
 	pull     *forge.ChangeRequest
 	draft    bool
 	comments []forge.Comment
+	// updated est la dernière mise à jour ; state, closedAt et commits
+	// décrivent une PR.
+	updated  time.Time
+	state    forge.ChangeRequestState
+	closedAt time.Time
+	commits  []string
 }
 
 func newAPI(t *testing.T) *api {
@@ -64,10 +70,27 @@ func (a *api) Code() forge.CodeForge       { return a.client }
 func (a *api) AddTicket(t forge.Ticket, closed bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.issues[t.Repo] = append(a.issues[t.Repo], &ghIssue{Ticket: t, closed: closed, comments: slices.Clone(t.Comments)})
+	updated := t.CreatedAt
+	for _, c := range t.Comments {
+		if c.CreatedAt.After(updated) {
+			updated = c.CreatedAt
+		}
+		if c.UpdatedAt.After(updated) {
+			updated = c.UpdatedAt
+		}
+	}
+	a.issues[t.Repo] = append(a.issues[t.Repo], &ghIssue{Ticket: t, closed: closed, comments: slices.Clone(t.Comments), updated: updated})
 	for _, l := range t.Labels {
 		a.define(t.Repo, l)
 	}
+}
+
+func (a *api) SetChange(repo string, number int, state forge.ChangeRequestState, at time.Time, commits ...string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	i := a.find(repo, number)
+	i.state, i.closedAt, i.commits = state, at, commits
+	i.closed = state != forge.ChangeOpen
 }
 
 func (a *api) SetFile(repo, path, content string) {
@@ -131,11 +154,44 @@ func (a *api) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && len(route) == 1 && route[0] == "issues":
 		a.listIssues(w, r, repo)
 	case r.Method == http.MethodPost && len(route) == 1 && route[0] == "issues":
-		var body struct{ Title, Body string }
+		var body struct {
+			Title, Body string
+			Labels      []string
+		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		i := &ghIssue{Ticket: forge.Ticket{Repo: repo, Number: a.next(repo), Title: body.Title, Body: body.Body}}
+		i := &ghIssue{Ticket: forge.Ticket{Repo: repo, Number: a.next(repo), Title: body.Title, Body: body.Body, Labels: body.Labels}, updated: time.Now()}
+		for _, l := range body.Labels {
+			a.define(repo, l)
+		}
 		a.issues[repo] = append(a.issues[repo], i)
 		created(w, i.Number, "https://github.example/"+repo+"/issues/"+strconv.Itoa(i.Number))
+	case r.Method == http.MethodPatch && len(route) == 2 && route[0] == "issues":
+		n, _ := strconv.Atoi(route[1])
+		i := a.find(repo, n)
+		if i == nil {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct{ Body string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		i.Body, i.updated = body.Body, time.Now()
+		_ = json.NewEncoder(w).Encode(map[string]any{"number": i.Number, "html_url": "https://github.example/" + repo + "/issues/" + strconv.Itoa(i.Number)})
+	case r.Method == http.MethodGet && len(route) == 1 && route[0] == "pulls":
+		a.listPulls(w, r, repo)
+	case r.Method == http.MethodGet && len(route) == 3 && route[0] == "pulls" && route[2] == "commits":
+		n, _ := strconv.Atoi(route[1])
+		i := a.find(repo, n)
+		if i == nil || i.pull == nil {
+			http.NotFound(w, r)
+			return
+		}
+		out := []map[string]any{}
+		if page, _ := strconv.Atoi(r.URL.Query().Get("page")); page <= 1 {
+			for _, m := range i.commits {
+				out = append(out, map[string]any{"commit": map[string]string{"message": m}})
+			}
+		}
+		_ = json.NewEncoder(w).Encode(out)
 	case r.Method == http.MethodPost && len(route) == 1 && route[0] == "pulls":
 		var body struct {
 			Head, Base, Title, Body string
@@ -143,10 +199,13 @@ func (a *api) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		i := &ghIssue{
-			Ticket: forge.Ticket{Repo: repo, Number: a.next(repo), Title: body.Title, Body: body.Body},
-			pull:   &forge.ChangeRequest{Head: body.Head, Base: body.Base, Title: body.Title, Body: body.Body},
-			draft:  body.Draft,
+			Ticket:  forge.Ticket{Repo: repo, Number: a.next(repo), Title: body.Title, Body: body.Body},
+			pull:    &forge.ChangeRequest{Head: body.Head, Base: body.Base, Title: body.Title, Body: body.Body},
+			draft:   body.Draft,
+			updated: time.Now(),
+			state:   forge.ChangeOpen,
 		}
+		i.CreatedAt = time.Now()
 		a.issues[repo] = append(a.issues[repo], i)
 		created(w, i.Number, "https://github.example/"+repo+"/pull/"+strconv.Itoa(i.Number))
 	case route[0] == "issues" && len(route) >= 3:
@@ -165,9 +224,10 @@ func (a *api) listIssues(w http.ResponseWriter, r *http.Request, repo string) {
 		Name string `json:"name"`
 	}
 	out := []map[string]any{}
+	since, _ := time.Parse(time.RFC3339, q.Get("since"))
 	if page, _ := strconv.Atoi(q.Get("page")); page <= 1 {
 		for _, i := range a.issues[repo] {
-			if (q.Get("state") == "open" && i.closed) || (q.Get("labels") != "" && !slices.Contains(i.Labels, q.Get("labels"))) {
+			if (q.Get("state") == "open" && i.closed) || (q.Get("labels") != "" && !slices.Contains(i.Labels, q.Get("labels"))) || i.updated.Before(since) {
 				continue
 			}
 			var labels []label
@@ -179,12 +239,38 @@ func (a *api) listIssues(w http.ResponseWriter, r *http.Request, repo string) {
 				association = "OWNER"
 			}
 			e := map[string]any{
-				"number": i.Number, "title": i.Title, "body": i.Body, "created_at": i.CreatedAt,
+				"number": i.Number, "html_url": "https://github.example/" + repo + "/issues/" + strconv.Itoa(i.Number),
+				"title": i.Title, "body": i.Body, "created_at": i.CreatedAt,
 				"user": map[string]string{"login": i.Author}, "author_association": association, "labels": labels,
 				"issue_dependencies_summary": map[string]int{"blocked_by": i.OpenBlockers},
 			}
 			if i.pull != nil {
 				e["pull_request"] = map[string]any{}
+			}
+			out = append(out, e)
+		}
+	}
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// listPulls sert les PR d'un dépôt, les plus récentes d'abord.
+func (a *api) listPulls(w http.ResponseWriter, r *http.Request, repo string) {
+	out := []map[string]any{}
+	if page, _ := strconv.Atoi(r.URL.Query().Get("page")); page <= 1 {
+		for _, i := range slices.Backward(a.issues[repo]) {
+			if i.pull == nil {
+				continue
+			}
+			e := map[string]any{
+				"number": i.Number, "html_url": "https://github.example/" + repo + "/pull/" + strconv.Itoa(i.Number),
+				"state": "open", "created_at": i.CreatedAt, "closed_at": nil, "merged_at": nil,
+				"head": map[string]string{"ref": i.pull.Head},
+			}
+			if i.state != forge.ChangeOpen {
+				e["state"], e["closed_at"] = "closed", i.closedAt
+			}
+			if i.state == forge.ChangeMerged {
+				e["merged_at"] = i.closedAt
 			}
 			out = append(out, e)
 		}

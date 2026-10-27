@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -370,6 +371,146 @@ func (c *Client) CreateIssue(ctx context.Context, repo, title, body string) (int
 		return 0, "", err
 	}
 	return out.IID, out.WebURL, nil
+}
+
+// UpdatedTickets implémente forge.TicketSource par le filtre updated_after
+// de l'API des issues. Les tickets rendus ne comptent pas leurs bloqueurs :
+// seuls ReadyTickets en a besoin.
+func (c *Client) UpdatedTickets(ctx context.Context, repo string, since time.Time) ([]forge.Ticket, error) {
+	members := map[int]bool{}
+	var ts []forge.Ticket
+	q := url.Values{"updated_after": {since.UTC().Format(time.RFC3339)}, "scope": {"all"}, "per_page": {"100"}}
+	for page := 1; ; page++ {
+		q.Set("page", fmt.Sprint(page))
+		var batch []issue
+		if err := c.do(ctx, http.MethodGet, project(repo)+"/issues?"+q.Encode(), nil, &batch); err != nil {
+			return nil, err
+		}
+		for _, i := range batch {
+			associated, err := c.associated(ctx, repo, i.Author, members)
+			if err != nil {
+				return nil, err
+			}
+			t := forge.Ticket{
+				Repo: repo, Number: i.IID, Title: i.Title, Body: i.Description,
+				Author: i.Author.Username, AuthorAssociated: associated, Labels: i.Labels, CreatedAt: i.CreatedAt,
+			}
+			if t.Comments, err = c.notes(ctx, repo, i.IID, members); err != nil {
+				return nil, err
+			}
+			ts = append(ts, t)
+		}
+		if len(batch) < 100 {
+			return ts, nil
+		}
+	}
+}
+
+// PutIssue implémente forge.TicketSource : l'issue ouverte de même label et
+// de même titre voit sa description remplacée ; sinon une issue est ouverte
+// avec le label, créé dans le projet s'il manque.
+func (c *Client) PutIssue(ctx context.Context, repo, label, title, body string) (int, string, error) {
+	q := url.Values{"state": {"opened"}, "labels": {label}, "scope": {"all"}, "per_page": {"100"}}
+	for page := 1; ; page++ {
+		q.Set("page", fmt.Sprint(page))
+		var batch []issue
+		if err := c.do(ctx, http.MethodGet, project(repo)+"/issues?"+q.Encode(), nil, &batch); err != nil {
+			return 0, "", err
+		}
+		for _, i := range batch {
+			if i.Title == title {
+				var out issue
+				if err := c.do(ctx, http.MethodPut, fmt.Sprintf("%s/issues/%d", project(repo), i.IID), map[string]string{"description": body}, &out); err != nil {
+					return 0, "", err
+				}
+				return out.IID, out.WebURL, nil
+			}
+		}
+		if len(batch) < 100 {
+			break
+		}
+	}
+	if err := c.ensureLabel(ctx, repo, label); err != nil {
+		return 0, "", err
+	}
+	var out issue
+	if err := c.do(ctx, http.MethodPost, project(repo)+"/issues", map[string]string{"title": title, "description": body, "labels": label}, &out); err != nil {
+		return 0, "", err
+	}
+	return out.IID, out.WebURL, nil
+}
+
+type mergeRequest struct {
+	IID          int        `json:"iid"`
+	WebURL       string     `json:"web_url"`
+	SourceBranch string     `json:"source_branch"`
+	State        string     `json:"state"`
+	CreatedAt    time.Time  `json:"created_at"`
+	MergedAt     *time.Time `json:"merged_at"`
+	ClosedAt     *time.Time `json:"closed_at"`
+}
+
+// AgentChangeRequests implémente forge.CodeForge par les merge requests du
+// projet, les plus récentes d'abord ; une merge request verrouillée compte
+// comme ouverte.
+func (c *Client) AgentChangeRequests(ctx context.Context, repo string) ([]forge.ChangeRequestStatus, error) {
+	var out []forge.ChangeRequestStatus
+	q := url.Values{"state": {"all"}, "order_by": {"created_at"}, "sort": {"desc"}, "scope": {"all"}, "per_page": {"100"}}
+	for page := 1; ; page++ {
+		q.Set("page", fmt.Sprint(page))
+		var batch []mergeRequest
+		if err := c.do(ctx, http.MethodGet, project(repo)+"/merge_requests?"+q.Encode(), nil, &batch); err != nil {
+			return nil, err
+		}
+		for _, m := range batch {
+			if !strings.HasPrefix(m.SourceBranch, forge.AgentBranchPrefix) {
+				continue
+			}
+			s := forge.ChangeRequestStatus{Number: m.IID, URL: m.WebURL, Head: m.SourceBranch, State: forge.ChangeOpen, CreatedAt: m.CreatedAt}
+			switch m.State {
+			case "merged":
+				s.State = forge.ChangeMerged
+				if m.MergedAt != nil {
+					s.ClosedAt = *m.MergedAt
+				}
+			case "closed":
+				s.State = forge.ChangeClosed
+				if m.ClosedAt != nil {
+					s.ClosedAt = *m.ClosedAt
+				}
+			}
+			out = append(out, s)
+			if len(out) == forge.MaxAgentChangeRequests {
+				return out, nil
+			}
+		}
+		// Au-delà de quelques pages, les merge requests sont trop anciennes
+		// pour une semaine ou un palier.
+		if len(batch) < 100 || page == 5 {
+			return out, nil
+		}
+	}
+}
+
+// ChangeRequestCommits implémente forge.CodeForge ; GitLab rend les commits
+// d'une merge request du plus récent au plus ancien.
+func (c *Client) ChangeRequestCommits(ctx context.Context, repo string, number int) ([]string, error) {
+	var out []string
+	for page := 1; ; page++ {
+		var batch []struct {
+			Message string `json:"message"`
+		}
+		if err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/merge_requests/%d/commits?per_page=100&page=%d", project(repo), number, page), nil, &batch); err != nil {
+			return nil, err
+		}
+		for _, b := range batch {
+			out = append(out, b.Message)
+		}
+		if len(batch) < 100 {
+			slices.Reverse(out)
+			return out, nil
+		}
+	}
 }
 
 // OpenChangeRequest implémente forge.CodeForge par une merge request en

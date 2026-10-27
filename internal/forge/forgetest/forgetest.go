@@ -29,6 +29,10 @@ type Fixture interface {
 	SetFile(repo, path, content string)
 	// SetChecks fixe les checks rapportés sur un commit.
 	SetChecks(repo, sha string, checks ...forge.Check)
+	// SetChange fixe l'état d'une demande de changement ouverte par
+	// OpenChangeRequest, la date de son merge ou de sa fermeture, et les
+	// messages de ses commits.
+	SetChange(repo string, number int, state forge.ChangeRequestState, at time.Time, commits ...string)
 
 	// Ticket rend l'état d'un ticket ou d'une issue.
 	Ticket(repo string, number int) Ticket
@@ -68,6 +72,9 @@ func Run(t *testing.T, newFixture func(t *testing.T) Fixture) {
 		{"ChangeRequestCommentsAndLabels", changeRequestCommentsAndLabels},
 		{"ChecksAreReadPerCommit", checks},
 		{"GitAccessNamesCloneURLAndIdentities", gitAccess},
+		{"UpdatedTicketsListsOpenAndClosedTicketsTouchedSince", updatedTickets},
+		{"PutIssueOpensThenUpdatesTheSameIssue", putIssue},
+		{"AgentChangeRequestsGiveStateAndCommits", agentChangeRequests},
 	} {
 		t.Run(s.name, func(t *testing.T) { s.run(t, newFixture(t)) })
 	}
@@ -285,6 +292,103 @@ func gitAccess(t *testing.T, f Fixture) {
 	}
 	if a.Identity == a.Agent {
 		t.Errorf("night-shift et l'agent signent sous la même identité %+v", a.Identity)
+	}
+}
+
+func updatedTickets(t *testing.T, f Fixture) {
+	ctx := context.Background()
+	old := day.Add(-48 * time.Hour)
+	f.AddTicket(forge.Ticket{Repo: "o/a", Number: 1, Title: "commenté", Author: "alice", Labels: []string{forge.LabelHuman}, CreatedAt: old,
+		Comments: []forge.Comment{{Author: "bob", Associated: true, Body: "réservé", CreatedAt: day.Add(time.Hour)}}}, false)
+	f.AddTicket(forge.Ticket{Repo: "o/a", Number: 2, Title: "intact", Author: "alice", CreatedAt: old}, false)
+	f.AddTicket(forge.Ticket{Repo: "o/a", Number: 3, Title: "fermé", Author: "alice", CreatedAt: day.Add(2 * time.Hour)}, true)
+	f.AddTicket(forge.Ticket{Repo: "o/b", Number: 4, Title: "autre dépôt", Author: "alice", CreatedAt: day.Add(2 * time.Hour)}, false)
+	if _, _, err := f.Code().OpenChangeRequest(ctx, "o/a", forge.ChangeRequest{Head: "agent/1-x", Base: "main", Title: "T", Body: "B"}); err != nil {
+		t.Fatal(err)
+	}
+
+	ts, err := f.Tickets().UpdatedTickets(ctx, "o/a", day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]forge.Ticket{}
+	for _, tk := range ts {
+		got[tk.Number] = tk
+	}
+	if len(got) != 2 || got[1].Title != "commenté" || got[3].Title != "fermé" {
+		t.Fatalf("tickets mis à jour = %+v, attendu #1 et #3", ts)
+	}
+	c := got[1].Comments
+	if !slices.Equal(got[1].Labels, []string{forge.LabelHuman}) || len(c) != 1 || c[0].Body != "réservé" || !c[0].Associated || !c[0].CreatedAt.Equal(day.Add(time.Hour)) {
+		t.Fatalf("ticket #1 = %+v, attendu ses labels et son commentaire daté", got[1])
+	}
+}
+
+func putIssue(t *testing.T, f Fixture) {
+	ctx := context.Background()
+	src := f.Tickets()
+	const label = "night-shift-weekly"
+
+	n, url, err := src.PutIssue(ctx, "o/a", label, "semaine 1", "v1")
+	if err != nil || n == 0 || url == "" {
+		t.Fatalf("PutIssue = %d, %q, %v", n, url, err)
+	}
+	m, url2, err := src.PutIssue(ctx, "o/a", label, "semaine 1", "v2")
+	if err != nil || m != n || url2 != url {
+		t.Fatalf("second PutIssue = %d, %q, %v ; attendu la même issue #%d", m, url2, err, n)
+	}
+	if got := f.Ticket("o/a", n); got.Body != "v2" || !slices.Equal(got.Labels, []string{label}) {
+		t.Fatalf("issue = %+v, attendu le corps mis à jour et le label %q", got, label)
+	}
+	k, _, err := src.PutIssue(ctx, "o/a", label, "semaine 2", "v1")
+	if err != nil || k == n {
+		t.Fatalf("autre titre = %d, %v ; attendu une nouvelle issue", k, err)
+	}
+	if !slices.Contains(f.RepoLabels("o/a"), label) {
+		t.Fatalf("labels du dépôt = %q, attendu %q créé", f.RepoLabels("o/a"), label)
+	}
+}
+
+func agentChangeRequests(t *testing.T, f Fixture) {
+	ctx := context.Background()
+	code := f.Code()
+	open := func(head string) int {
+		n, _, err := code.OpenChangeRequest(ctx, "o/a", forge.ChangeRequest{Head: head, Base: "main", Title: "T " + head, Body: "B"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	merged, other, closed, pending := open("agent/1-a"), open("feature/x"), open("agent/3-c"), open("agent/4-d")
+	commits := []string{"feat: a\n\nCorps.\n\nNight-Shift-Agent: claude\nNight-Shift-Pass: pass-1", "fix: retouche humaine"}
+	f.SetChange("o/a", merged, forge.ChangeMerged, day, commits...)
+	f.SetChange("o/a", closed, forge.ChangeClosed, day.Add(time.Hour))
+
+	got, err := code.AgentChangeRequests(ctx, "o/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var numbers []int
+	for _, c := range got {
+		numbers = append(numbers, c.Number)
+		if c.URL == "" || c.CreatedAt.IsZero() || !strings.HasPrefix(c.Head, forge.AgentBranchPrefix) {
+			t.Errorf("demande = %+v, attendu son URL, sa date d'ouverture et sa branche agent/", c)
+		}
+	}
+	if !slices.Equal(numbers, []int{pending, closed, merged}) || slices.Contains(numbers, other) {
+		t.Fatalf("demandes = %v, attendu les seules branches agent/, la plus récente d'abord : %v", numbers, []int{pending, closed, merged})
+	}
+	for _, c := range []struct {
+		status forge.ChangeRequestStatus
+		state  forge.ChangeRequestState
+		at     time.Time
+	}{{got[0], forge.ChangeOpen, time.Time{}}, {got[1], forge.ChangeClosed, day.Add(time.Hour)}, {got[2], forge.ChangeMerged, day}} {
+		if c.status.State != c.state || !c.status.ClosedAt.Equal(c.at) {
+			t.Errorf("demande #%d = %s le %s, attendu %s le %s", c.status.Number, c.status.State, c.status.ClosedAt, c.state, c.at)
+		}
+	}
+	if msgs, err := code.ChangeRequestCommits(ctx, "o/a", merged); err != nil || !slices.Equal(msgs, commits) {
+		t.Fatalf("commits = %q, %v\nattendu %q", msgs, err, commits)
 	}
 }
 

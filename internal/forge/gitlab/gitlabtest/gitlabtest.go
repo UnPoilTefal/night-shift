@@ -36,7 +36,10 @@ type Issue struct {
 	Labels      []string
 	Closed      bool
 	CreatedAt   time.Time
-	Notes       []Note
+	// UpdatedAt est la dernière mise à jour ; à zéro, AddIssue la déduit de
+	// la création et des notes.
+	UpdatedAt time.Time
+	Notes     []Note
 	// Links sont ses liens vers d'autres issues.
 	Links []Link
 }
@@ -68,6 +71,12 @@ type MergeRequest struct {
 	Notes                      []Note
 	// SHA est le commit de tête de la merge request.
 	SHA string
+	// State vaut opened, merged ou closed ; ClosedAt date le merge ou la
+	// fermeture. Commits sont les messages de ses commits, du plus ancien
+	// au plus récent.
+	State               string
+	CreatedAt, ClosedAt time.Time
+	Commits             []string
 }
 
 // draftMarker est une marque de brouillon que GitLab reconnaît en tête de
@@ -167,10 +176,38 @@ func (s *Server) AddIssue(repo string, i Issue) {
 	defer s.mu.Unlock()
 	p := s.project(repo)
 	i.Labels, i.Notes, i.Links = slices.Clone(i.Labels), slices.Clone(i.Notes), slices.Clone(i.Links)
+	if i.UpdatedAt.IsZero() {
+		i.UpdatedAt = i.CreatedAt
+		for _, n := range i.Notes {
+			i.UpdatedAt = latest(i.UpdatedAt, n.CreatedAt, n.UpdatedAt)
+		}
+	}
 	p.issues = append(p.issues, &i)
 	for _, l := range i.Labels {
 		s.define(p, l)
 	}
+}
+
+// SetMergeRequestState fixe l'état d'une merge request (opened, merged,
+// closed), la date de son merge ou de sa fermeture et ses commits.
+func (s *Server) SetMergeRequestState(repo string, iid int, state string, at time.Time, commits ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := find(s.project(repo).mrs, iid)
+	if m == nil {
+		panic(fmt.Sprintf("merge request %s!%d inconnue", repo, iid))
+	}
+	m.State, m.ClosedAt, m.Commits = state, at, slices.Clone(commits)
+}
+
+func latest(ts ...time.Time) time.Time {
+	var out time.Time
+	for _, t := range ts {
+		if t.After(out) {
+			out = t
+		}
+	}
+	return out
 }
 
 // AddMember fait de user un membre de repo au niveau d'accès level,
@@ -364,7 +401,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case route[0] == "issues" && len(route) == 1 && r.Method == http.MethodGet:
 		s.listIssues(w, r, repo, p)
 	case route[0] == "issues" && len(route) == 1 && r.Method == http.MethodPost:
-		i := &Issue{IID: nextIID(p.issues), Title: str("title"), Description: str("description"), Author: Bot, CreatedAt: time.Now()}
+		i := &Issue{IID: nextIID(p.issues), Title: str("title"), Description: str("description"), Author: Bot, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+		if !s.relabel(w, p, &i.Labels, str("labels"), "") {
+			return
+		}
 		p.issues = append(p.issues, i)
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, s.issueJSON(repo, i))
@@ -378,6 +418,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			if !s.relabel(w, p, &i.Labels, str("add_labels"), str("remove_labels")) {
 				return
 			}
+			if d, ok := body["description"].(string); ok {
+				i.Description = d
+			}
+			i.UpdatedAt = time.Now()
 		}
 		writeJSON(w, s.issueJSON(repo, i))
 	case route[0] == "issues" && len(route) == 3 && route[2] == "notes":
@@ -385,6 +429,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		if i == nil {
 			notFound(w)
 			return
+		}
+		if r.Method == http.MethodPost {
+			i.UpdatedAt = time.Now()
 		}
 		s.notes(w, r, &i.Notes, str("body"))
 	case route[0] == "issues" && len(route) == 3 && route[2] == "links" && r.Method == http.MethodGet:
@@ -444,10 +491,45 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		m := &MergeRequest{
 			IID: nextIID(p.mrs), SourceBranch: str("source_branch"), TargetBranch: str("target_branch"),
 			Title: str("title"), Description: str("description"), RemoveSourceBranch: remove,
+			State: "opened", CreatedAt: time.Now(),
 		}
 		p.mrs = append(p.mrs, m)
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, map[string]any{"iid": m.IID, "web_url": s.webURL(repo, "merge_requests", m.IID), "draft": m.Draft()})
+	case route[0] == "merge_requests" && len(route) == 1 && r.Method == http.MethodGet:
+		// Comme GitLab avec order_by=created_at et sort=desc.
+		out := []map[string]any{}
+		if page, _ := strconv.Atoi(r.URL.Query().Get("page")); page <= 1 {
+			for _, m := range slices.Backward(p.mrs) {
+				e := map[string]any{
+					"iid": m.IID, "web_url": s.webURL(repo, "merge_requests", m.IID), "source_branch": m.SourceBranch,
+					"state": m.State, "created_at": m.CreatedAt, "merged_at": nil, "closed_at": nil,
+				}
+				switch m.State {
+				case "merged":
+					e["merged_at"] = m.ClosedAt
+				case "closed":
+					e["closed_at"] = m.ClosedAt
+				}
+				out = append(out, e)
+			}
+		}
+		writeJSON(w, out)
+	case route[0] == "merge_requests" && len(route) == 3 && route[2] == "commits" && r.Method == http.MethodGet:
+		m := find(p.mrs, n(1))
+		if m == nil {
+			notFound(w)
+			return
+		}
+		// GitLab rend les commits d'une merge request du plus récent au plus
+		// ancien.
+		out := []map[string]any{}
+		if page, _ := strconv.Atoi(r.URL.Query().Get("page")); page <= 1 {
+			for _, c := range slices.Backward(m.Commits) {
+				out = append(out, map[string]any{"message": c})
+			}
+		}
+		writeJSON(w, out)
 	case route[0] == "merge_requests" && len(route) == 2 && r.Method == http.MethodGet:
 		m := find(p.mrs, n(1))
 		if m == nil {
@@ -529,8 +611,9 @@ func (s *Server) listIssues(w http.ResponseWriter, r *http.Request, repo string,
 	q := r.URL.Query()
 	out := []map[string]any{}
 	if page, _ := strconv.Atoi(q.Get("page")); page <= 1 {
+		after, _ := time.Parse(time.RFC3339, q.Get("updated_after"))
 		for _, i := range p.issues {
-			if q.Get("state") == "opened" && i.Closed {
+			if q.Get("state") == "opened" && i.Closed || i.UpdatedAt.Before(after) {
 				continue
 			}
 			if want := q.Get("labels"); want != "" && slices.ContainsFunc(strings.Split(want, ","), func(l string) bool { return !slices.Contains(i.Labels, l) }) {
@@ -553,7 +636,7 @@ func (s *Server) issueJSON(repo string, i *Issue) map[string]any {
 	}
 	labels := append([]string{}, i.Labels...)
 	return map[string]any{
-		"iid": i.IID, "title": i.Title, "description": i.Description, "state": state, "created_at": i.CreatedAt,
+		"iid": i.IID, "title": i.Title, "description": i.Description, "state": state, "created_at": i.CreatedAt, "updated_at": i.UpdatedAt,
 		"author": map[string]any{"id": s.user(i.Author), "username": i.Author}, "labels": labels,
 		"web_url": s.webURL(repo, "issues", i.IID),
 	}

@@ -94,7 +94,7 @@ A repository's **trust level** (*palier de confiance*: tickets per pass, draft o
 
 ## Roadmap
 
-Status: **a pass runs a real headless `claude -p` agent on a brief built from trusted authors only, refuses to push any commit that touches a forbidden zone, opens a draft PR on GitHub or a draft merge request on GitLab, follows its CI with at most two agent rounds, and ends with a digest; images are published on each release. Outcomes and the weekly digest come next.**
+Status: **a pass runs a real headless `claude -p` agent on a brief built from trusted authors only, refuses to push any commit that touches a forbidden zone, opens a draft PR on GitHub or a draft merge request on GitLab, follows its CI with at most two agent rounds, and ends with a digest; a weekly issue reads each ticket's outcome back from the forge and reports the delegation rate; images are published on each release.**
 
 **Solo tier** ([spec](https://github.com/UnPoilTefal/night-shift/issues/2))
 
@@ -112,7 +112,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Fixed refusals for irreversible actions (push, merge, editing a ticket or PR body), passed to the agent whatever the allowed tools; defence in depth on top of the agent having no write token ([#115](https://github.com/UnPoilTefal/night-shift/issues/115))
 - [x] Every secret readable from a file (`…_FILE`), so a deployment can keep secrets out of the environment ([#107](https://github.com/UnPoilTefal/night-shift/issues/107))
 - [x] Control service v1: scheduled and manual passes one at a time, watchdog, host-only history behind a read-only API ([#109](https://github.com/UnPoilTefal/night-shift/issues/109), [docs](docs/control.md))
-- [ ] Outcomes and weekly digest ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
+- [x] Outcomes and weekly digest: `night-shift weekly` reads each ticket's outcome on the forge, reports the delegation rate and flags the trust-level criterion, on GitHub and GitLab ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 - [ ] Docker Compose example (solo tier, no cluster): the same steps of the same binary on a single Docker host ([spec](https://github.com/UnPoilTefal/night-shift/issues/105), [ADR 0013](docs/adr/0013-exemple-compose-second-systeme-d-execution.md))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
@@ -214,6 +214,18 @@ Each ticket gets a summary comment: what was done, cost, duration and its provis
 - **What stays inside**: anything that does not concern a repository never leaves the cluster: which repositories were left out and why, and the details of incidents. Today they live in the logs of the pass's pods, and the example `CronJob` keeps a week of Jobs so that recent passes stay inspectable. An in-cluster view of past passes is planned for the platform tier ([#51](https://github.com/UnPoilTefal/night-shift/issues/51)).
 - **Incidents**: if part of the pass fails (a reservation, a clone), `select` records it instead of exiting, so the pod still reaches publication. The digest counts the incidents without their details, then `publish` exits with an error so that the job shows the failure.
 - **Discord notification** (optional): it holds only counters (tickets, zone refusals, triage, incidents, repositories left out or unreachable) and links to the digest issues; it never names a repository left out, never carries an error message or ticket content, and mentions nobody. The egress proxy must let `publish` reach `discord.com`. Without a webhook, the pass still succeeds and the digest says the notification is not configured. If the webhook fails, the digest issues get a comment saying so.
+
+**Weekly issue.** `night-shift weekly --repo owner/repo` (with `--forge` and `--instance` like the other trusted steps) runs with the forge token only, no model and no local state. For each opted-in repository, it reads on the forge the final **outcome** of every ticket a pass reserved during the ISO week (Monday to Sunday, UTC; `--week 2026-10-21` picks another week):
+
+| Outcome | Read on the forge |
+|---|---|
+| Merged as is | The change request of the ticket's `agent/<n>-…` branch is merged, and every commit carries the `Night-Shift-Agent` trailer |
+| Merged after rework | It is merged, and at least one commit lacks the trailer: a human added it |
+| Closed without merge | It is closed, not merged |
+| Handed back | The ticket is in `needs-info` or `ready-for-human`; a zone refusal is shown apart |
+| Pending | The change request is still open: it does not count yet |
+
+A ticket counts as reserved through the reservation comment of a pass, posted by an author associated with the repository. The issue gives the **delegation rate**: tickets whose change request a human merged, as is or after rework, over the reserved tickets, without the `needs-info` ones (shown apart, since they measure the brief) and the pending ones. It also counts the change requests the agent opened in the week, and flags the **trust-level criterion** when the last 5 closed agent change requests were merged as is. It never touches the opt-in: raising the trust level stays a human decision. Two runs in the same week update the same issue, labelled `night-shift-weekly`, instead of opening a second one. [`examples/solo/cronjob-weekly.yaml`](examples/solo/cronjob-weekly.yaml) runs it every Sunday evening, as a second `CronJob` that mounts the forge token and no model secret; a test in the repository checks it.
 
 [`examples/solo/cronjob.yaml`](examples/solo/cronjob.yaml) shows the expected deployment, and [`cronjob-gitlab.yaml`](examples/solo/cronjob-gitlab.yaml) the same on GitLab ([guide](docs/gitlab.md)): a `CronJob` whose pod runs `select`, `agent`, `publish` and `retry-agent` as init containers and `retry-publish` as its container, with the forge token and the Discord webhook mounted only in the trusted steps. Its deadline (90 minutes) covers two agent rounds of 30 minutes and two CI waits of 10 minutes. A test in the repository keeps both variants that way, and fails if a forge token reaches an agent step or if an agent step mounts a persistent volume. The egress proxy and transcript retention belong to your deployment.
 

@@ -22,6 +22,10 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/zones"
 )
 
+// AgentTrailer est le trailer que la Publication ajoute à chaque commit de
+// l'agent : un commit qui ne le porte pas vient d'un humain.
+const AgentTrailer = "Night-Shift-Agent"
+
 // Git publie par git et ouvre la demande de changement par la forge de code
 // du dépôt cible, qui décrit aussi l'accès git.
 type Git struct {
@@ -80,7 +84,7 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 		}
 	}
 	trailers := []string{"interpret-trailers", "--in-place",
-		"--trailer", "Night-Shift-Agent: " + oneLine(agent),
+		"--trailer", AgentTrailer + ": " + oneLine(agent),
 		"--trailer", "Night-Shift-Pass: " + oneLine(task.PassID)}
 	if _, err := remote.Git(ctx, dir, append(trailers, files...)...); err != nil {
 		return pass.Published{}, err

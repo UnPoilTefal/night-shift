@@ -1,0 +1,53 @@
+# Issue hebdomadaire du palier solo : un second CronJob, distinct de celui
+# des passes, qui lance night-shift weekly. Étape de confiance sans modèle et
+# sans état local : elle relit dans la forge le Résultat de chaque ticket
+# réservé dans la semaine, et ouvre par dépôt l'issue de la semaine, ou met à
+# jour celle qu'une exécution précédente a ouverte. Seul le jeton de forge
+# est monté, jamais de secret du modèle ; un test du dépôt (examples/solo) le
+# vérifie. Planifié le dimanche soir, il rapporte la semaine qui s'achève.
+#
+# Sur GitLab, ajoutez --forge gitlab et, pour une instance dédiée,
+# --instance <base>, et montez NIGHT_SHIFT_GITLAB_TOKEN (voir
+# cronjob-gitlab.yaml).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: night-shift-weekly
+spec:
+  schedule: "0 22 * * 0"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 4
+  failedJobsHistoryLimit: 4
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: weekly
+              image: ghcr.io/unpoiltefal/night-shift:latest
+              command: ["night-shift"]
+              args: ["weekly", "--repo", "owner/repo"]
+              env:
+                - name: NIGHT_SHIFT_GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef: {name: night-shift-forge, key: token}
+                - {name: HOME, value: /tmp}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+          volumes:
+            - {name: tmp, emptyDir: {}}

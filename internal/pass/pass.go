@@ -566,8 +566,8 @@ func Settle(ctx context.Context, cfg Config, src forge.TicketSource, code forge.
 			cfg.ID, res.Reason, changeNote, accounting(res))
 	case ZoneRefusal:
 		label = forge.LabelHuman
-		comment = fmt.Sprintf("night-shift (passe %s) : refus de zone, la Publication n'a rien poussé de ce tour et le ticket revient à un humain.\n\nMotif : %s%s%s",
-			cfg.ID, res.Reason, changeNote, accounting(res))
+		comment = fmt.Sprintf("night-shift (passe %s)%s de ce tour et le ticket revient à un humain.\n\nMotif : %s%s%s",
+			cfg.ID, ZoneRefusalNote, res.Reason, changeNote, accounting(res))
 	case harness.Stopped:
 		label = forge.LabelHuman
 		comment = fmt.Sprintf("night-shift (passe %s) : arrêt motivé de l'agent, ticket rendu à un humain.\n\nMotif : %s%s%s",
@@ -638,6 +638,15 @@ func accounting(res harness.Result) string {
 	return fmt.Sprintf("\n\nDurée : %s, coût : %.2f $, session : %s", res.Duration.Round(time.Second), res.CostUSD, res.SessionID)
 }
 
+// ReservationNote ouvre le commentaire qui réserve un ticket : le digest
+// hebdomadaire y reconnaît les tickets traités, sous la signature d'un
+// auteur associé au dépôt.
+const ReservationNote = "night-shift : ticket réservé par la passe "
+
+// ZoneRefusalNote figure dans le commentaire de rendu d'un ticket après un
+// refus de zone.
+const ZoneRefusalNote = " : refus de zone, la Publication n'a rien poussé"
+
 func reserve(ctx context.Context, cfg Config, f forge.TicketSource, t forge.Ticket) error {
 	if err := f.AddLabel(ctx, t.Repo, t.Number, forge.LabelInProgress); err != nil {
 		return err
@@ -646,7 +655,7 @@ func reserve(ctx context.Context, cfg Config, f forge.TicketSource, t forge.Tick
 		return err
 	}
 	return f.Comment(ctx, t.Repo, t.Number, fmt.Sprintf(
-		"night-shift : ticket réservé par la passe %s le %s.", cfg.ID, cfg.Now().UTC().Format(time.RFC3339)))
+		"%s%s le %s.", ReservationNote, cfg.ID, cfg.Now().UTC().Format(time.RFC3339)))
 }
 
 // retriage sort un ticket de la file sans le traiter : il repasse en
