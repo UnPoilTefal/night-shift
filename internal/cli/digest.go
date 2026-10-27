@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/UnPoilTefal/night-shift/internal/digest"
@@ -18,13 +17,24 @@ import (
 // du webhook Discord du digest.
 const WebhookEnv = "NIGHT_SHIFT_DISCORD_WEBHOOK"
 
+// webhook lit l'URL du webhook, par sa variable ou par un fichier ; une
+// erreur est une erreur d'usage, signalée avant tout appel réseau.
+func webhook(cmd string, stderr io.Writer) (string, bool) {
+	u, err := secretEnv(WebhookEnv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s : %v\n", cmd, err)
+		return "", false
+	}
+	return u, true
+}
+
 // digestCode publie le digest de la passe et rend le code de sortie : 1 si
 // une issue de digest n'a pas pu être ouverte. Une notification absente ou
 // en échec ne fait pas échouer la passe ; le digest le signale.
-func digestCode(ctx context.Context, f forge.TicketSource, r pass.Report, stdout, stderr io.Writer, cmd string) int {
+func digestCode(ctx context.Context, f forge.TicketSource, hook string, r pass.Report, stdout, stderr io.Writer, cmd string) int {
 	var n digest.Notifier
-	if u := os.Getenv(WebhookEnv); u != "" {
-		n = discord.New(u)
+	if hook != "" {
+		n = discord.New(hook)
 	}
 	d, err := digest.Publish(ctx, f, n, r)
 	for _, i := range d.Issues {
@@ -47,7 +57,7 @@ func digestCode(ctx context.Context, f forge.TicketSource, r pass.Report, stdout
 // la Publication, s'il y en a un, et ses incidents, puis publie le digest. Un rapport absent ou
 // illisible n'empêche pas le rendu du ticket, déjà fait : il prive seulement
 // la passe de digest. Code de sortie : 1 si la passe a connu un incident.
-func publishDigest(ctx context.Context, f forge.TicketSource, d *stage.Dirs, tr *pass.TicketReport, incidents []string, stdout, stderr io.Writer) int {
+func publishDigest(ctx context.Context, f forge.TicketSource, hook string, d *stage.Dirs, tr *pass.TicketReport, incidents []string, stdout, stderr io.Writer) int {
 	report, ok, err := d.ReadReport()
 	switch {
 	case err != nil:
@@ -62,7 +72,7 @@ func publishDigest(ctx context.Context, f forge.TicketSource, d *stage.Dirs, tr 
 	}
 	report.Errors = append(report.Errors, incidents...)
 	report.Finished = time.Now()
-	code := digestCode(ctx, f, report, stdout, stderr, "publish")
+	code := digestCode(ctx, f, hook, report, stdout, stderr, "publish")
 	if len(report.Errors) > 0 {
 		_, _ = fmt.Fprintf(stderr, "publish : la passe a connu %d incident(s), voir le digest\n", len(report.Errors))
 		return 1

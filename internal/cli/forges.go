@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 
@@ -159,9 +158,13 @@ func (ff *forgeFlags) open(cmd string, stderr io.Writer, repos ...string) (Forge
 		_, _ = fmt.Fprintf(stderr, "%s : %v\n", cmd, err)
 		return nil, "", false
 	}
-	token := os.Getenv(a.tokenEnv)
+	token, err := secretEnv(a.tokenEnv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s : %v\n", cmd, err)
+		return nil, "", false
+	}
 	if token == "" {
-		_, _ = fmt.Fprintf(stderr, "%s : la variable %s doit porter le jeton de la forge %s\n", cmd, a.tokenEnv, a.name)
+		_, _ = fmt.Fprintf(stderr, "%s : la variable %s, ou %s, doit porter le jeton de la forge %s\n", cmd, a.tokenEnv, a.tokenEnv+FileSuffix, a.name)
 		return nil, "", false
 	}
 	return a.open(apiURL, gitURL, token), token, true
@@ -199,8 +202,8 @@ func ForgeSecretEnv() []string {
 // forgeToken rend le nom de la première variable de env (au format
 // NOM=valeur) qui porte un jeton de forge, par son nom ou par la forme de sa
 // valeur, quelle que soit la forge du registre. Ce n'est qu'un garde-fou :
-// un jeton monté dans un fichier lui échappe, et la garantie reste le
-// déploiement (ADR 0011).
+// un jeton monté dans un fichier lui échappe (passSecretFile ne voit que la
+// variable qui le nomme), et la garantie reste le déploiement (ADR 0011).
 func forgeToken(env []string) (name string, ok bool) {
 	names := ForgeSecretEnv()
 	var prefixes []string

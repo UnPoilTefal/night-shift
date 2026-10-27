@@ -142,11 +142,17 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	// Un jeton de forge dans l'environnement, reconnu à son nom ou à sa
-	// forme, est une erreur de déploiement :
-	// l'agent ne démarre pas, mais un ticket réservé reçoit tout de même un
-	// résultat, pour que la Publication le rende à un humain.
+	// forme, ou un secret des étapes de confiance donné par un fichier, est
+	// une erreur de déploiement : l'agent ne démarre pas, mais un ticket
+	// réservé reçoit tout de même un résultat, pour que la Publication le
+	// rende à un humain.
+	msg := ""
 	if k, found := forgeToken(os.Environ()); found {
-		msg := fmt.Sprintf("la variable %s porte un jeton de forge ; le conteneur de l'agent ne doit en recevoir aucun (ADR 0005)", k)
+		msg = fmt.Sprintf("la variable %s porte un jeton de forge ; le conteneur de l'agent ne doit en recevoir aucun (ADR 0005)", k)
+	} else if k, found := passSecretFile(os.Environ()); found {
+		msg = fmt.Sprintf("la variable %s donne un secret des étapes de confiance ; le conteneur de l'agent ne doit en recevoir aucun (ADR 0005)", k)
+	}
+	if msg != "" {
 		_, _ = fmt.Fprintf(stderr, "agent : %s\n", msg)
 		if !ok {
 			return 2
@@ -164,12 +170,18 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 
 	ctx, stop := signalContext()
 	defer stop()
+	// Le moyen d'authentification donné par un fichier passe à l'agent dans
+	// la variable que claude attend ; aucune variable …_FILE ne lui parvient.
+	env, err := withSecretFiles(os.Environ(), claude.CredentialEnv()...)
 	h := claude.Claude{
 		Bin: *bin, Dir: d.RepoDir(), BaseSHA: task.BaseSHA, OutDir: d.OutDir(),
 		Auth: claude.Auth(*auth), AllowedTools: splitList(*tools), Skill: *skill,
-		Timeout: *timeout, Env: os.Environ(), Secrets: append(ForgeSecretEnv(), WebhookEnv),
+		Timeout: *timeout, Env: env, Secrets: append(ForgeSecretEnv(), WebhookEnv),
 	}
-	res, err := h.Run(ctx, task)
+	var res harness.Result
+	if err == nil {
+		res, err = h.Run(ctx, task)
+	}
 	if err != nil {
 		res = harness.Result{Outcome: harness.Failed, Agent: "claude", Reason: err.Error()}
 	}
@@ -212,6 +224,10 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 2
 	}
+	hook, ok := webhook("publish", stderr)
+	if !ok {
+		return 2
+	}
 	task, ok, err := d.ReadTask()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "publish : %v\n", err)
@@ -231,7 +247,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	}
 	if !ok {
 		_, _ = fmt.Fprintln(stdout, "aucun ticket réservé, rien à publier")
-		return publishDigest(ctx, f, d, nil, nil, stdout, stderr)
+		return publishDigest(ctx, f, hook, d, nil, nil, stdout, stderr)
 	}
 
 	res, ok, err := d.ReadResult()
@@ -281,7 +297,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	printTickets(stdout, []pass.TicketReport{tr})
-	if code := publishDigest(ctx, f, d, &tr, incidents, stdout, stderr); code != 0 || err != nil {
+	if code := publishDigest(ctx, f, hook, d, &tr, incidents, stdout, stderr); code != 0 || err != nil {
 		return 1
 	}
 	return 0

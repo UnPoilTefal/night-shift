@@ -51,6 +51,10 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 2
 	}
+	hook, ok := webhook("pass", stderr)
+	if !ok {
+		return 2
+	}
 
 	now := time.Now
 	cfg := pass.Config{
@@ -65,7 +69,7 @@ func runPass(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	report, err := pass.Run(ctx, cfg, f, f, harness.Stub{}, nil)
 	printReport(stdout, report)
-	code := digestCode(ctx, f, report, stdout, stderr, "pass")
+	code := digestCode(ctx, f, hook, report, stdout, stderr, "pass")
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "pass : %v\n", err)
 		return 1
