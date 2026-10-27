@@ -27,7 +27,7 @@ func secretEnv(name string) (string, error) {
 	case v != "":
 		return "", fmt.Errorf("%s et %s sont exclusives : n'en donner qu'une", name, name+FileSuffix)
 	}
-	b, err := os.ReadFile(path) // #nosec G304 -- chemin fourni par le déploiement
+	b, err := os.ReadFile(path) // #nosec G304 G703 -- chemin fourni par le déploiement
 	if err != nil {
 		return "", fmt.Errorf("le fichier de %s est illisible", name+FileSuffix)
 	}
