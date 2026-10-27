@@ -94,6 +94,16 @@ Un passage de l'agent sur un ticket réservé, suivi de la publication de sa sé
 _FR_: tour
 _Avoid_: itération, essai, attempt
 
+**Relay**:
+Le mode où chaque étape d'une passe tourne en service permanent et attend son tour, au lieu d'être lancée dans l'ordre par un orchestrateur. Les étapes de confiance l'attendent auprès du service de contrôle ; l'agent, dans les volumes de la passe, par un marqueur de tour qui porte l'identifiant de la passe et une échéance. C'est ainsi que les étapes tournent sous Docker Compose.
+_FR_: relais
+_Avoid_: pipeline, chaîne, workflow
+
+**Control service**:
+Le service permanent (`night-shift control`) qui déclenche les passes hors Kubernetes, à l'échéance ou à la demande, n'en laisse tourner qu'une à la fois, sert le relais des étapes de confiance et tient l'historique des passes. Il ne détient aucun jeton de forge ni de modèle. C'est l'adaptateur Compose du plan de contrôle.
+_FR_: service de contrôle
+_Avoid_: scheduler, ordonnanceur, daemon, orchestrateur
+
 **Change request**:
 La proposition de modification qu'ouvre la publication sur le dépôt cible : une pull request sur GitHub, une merge request sur GitLab. Elle est en brouillon, sauf si le palier de confiance du repo autorise une demande prête. night-shift ne la merge jamais et ne l'approuve jamais.
 _FR_: demande de changement
