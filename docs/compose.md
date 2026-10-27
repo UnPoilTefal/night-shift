@@ -19,7 +19,7 @@ An end-to-end test ([`test/compose`](../test/compose/compose_test.go), `make tes
 
 - **Linux**: Docker Engine **28 or later**, with Compose v2. Engine 28 is the first version that can isolate the agents' network from the host (`gateway_mode_ipv4: isolated`).
 - **Docker Desktop**: fine for trying the stack, not for running it for real. See [Docker Desktop](#docker-desktop).
-- **Images**: relay mode and `control` came after release `0.2.0`, so no published image has them yet. Until the next release, build the images from `main` with `make images`, which tags them `dev`, the stack's default. After a release, set `NIGHT_SHIFT_VERSION` to it.
+- **Images**: relay mode and `control` ship from release `0.3.0`, the stack's default. To try `main`, build the images with `make images`, which tags them `dev`, and set `NIGHT_SHIFT_VERSION=dev`.
 
 ## Layout
 
@@ -54,7 +54,7 @@ Compose reads these variables from the environment or from a `.env` file next to
 | `NIGHT_SHIFT_FORGE` | `github` | Forge adapter: `github` or `gitlab` |
 | `NIGHT_SHIFT_INSTANCE` | empty | Base address of a dedicated or self-managed instance, for example `https://gitlab.example.com`. Leave it empty for github.com or gitlab.com |
 | `NIGHT_SHIFT_SCHEDULE` | `0 2 * * *` | Cron schedule of the passes, in UTC |
-| `NIGHT_SHIFT_VERSION` | `dev` | Tag of the `night-shift` and `night-shift-go` images |
+| `NIGHT_SHIFT_VERSION` | `0.3.0` | Tag of the `night-shift` and `night-shift-go` images |
 | `NIGHT_SHIFT_SECRETS_DIR` | `./secrets` | Directory of the secret files |
 
 On GitLab, for example:
