@@ -189,8 +189,8 @@ func nextTurn(ctx context.Context, cmd, dir string, last relay.Turn, stderr io.W
 // relayAgent attend les tours dans le volume de la tâche, en lecture seule
 // pour lui. Il ignore un marqueur d'une passe périmée, fait tourner l'agent
 // au plus jusqu'à l'échéance du tour, annonce sa fin dans sa sortie, puis ne
-// laisse rien au tour suivant : aucun autre processus, ni HOME ni
-// CLAUDE_CONFIG_DIR.
+// laisse rien au tour suivant : aucun autre processus, ni HOME, ni
+// CLAUDE_CONFIG_DIR, ni dossier temporaire.
 func relayAgent(ctx context.Context, d stage.Dirs, once func(ctx context.Context) int, stdout, stderr io.Writer) int {
 	if requirePID1 && os.Getpid() != 1 {
 		_, _ = fmt.Fprintln(stderr, "agent : en relais, l'agent doit être le PID 1 de son conteneur (init: false) : après chaque tour, il tue tous les autres processus qu'il peut atteindre")
@@ -227,12 +227,12 @@ func relayAgent(ctx context.Context, d stage.Dirs, once func(ctx context.Context
 	return 0
 }
 
-// cleanAfterRound tue tous les autres processus du conteneur, puis vide HOME
-// et CLAUDE_CONFIG_DIR : rien de ce que l'agent y a laissé ne sert au tour
-// suivant.
+// cleanAfterRound tue tous les autres processus du conteneur, puis vide HOME,
+// CLAUDE_CONFIG_DIR et le dossier temporaire : rien de ce que l'agent y a
+// laissé ne sert au tour suivant.
 func cleanAfterRound() error {
 	err := killOthers()
-	return errors.Join(err, clearDirs([]string{os.Getenv("HOME"), os.Getenv("CLAUDE_CONFIG_DIR")}))
+	return errors.Join(err, clearDirs([]string{os.Getenv("HOME"), os.Getenv("CLAUDE_CONFIG_DIR"), os.TempDir()}))
 }
 
 // killAllButSelf signale SIGKILL à tous les processus que l'appelant peut

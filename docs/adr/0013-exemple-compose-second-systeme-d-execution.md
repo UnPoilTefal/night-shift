@@ -31,7 +31,7 @@ L'exemple n'a ni script ni logique propres : un fichier `compose.yaml`, la confi
 
   | Écart par rapport au `CronJob` | Constaté par |
   |---|---|
-  | Le conteneur agent dure d'une passe à l'autre. Après chaque tour, le binaire, en PID 1, tue tous les autres processus et vide ses `tmpfs` (`HOME`, `CLAUDE_CONFIG_DIR`). | Scénario 6 du test de bout en bout (#111) : un faux agent hostile laisse un processus et des fichiers, rien ne subsiste à la passe suivante. |
+  | Le conteneur agent dure d'une passe à l'autre. Après chaque tour, le binaire, en PID 1, tue tous les autres processus et vide ses `tmpfs` (`HOME`, `CLAUDE_CONFIG_DIR`, `/tmp`, #129). | Scénario 6 du test de bout en bout (#111) : un faux agent hostile laisse un processus et des fichiers, rien ne subsiste à la passe suivante. |
   | La fin de l'agent est un marqueur qu'il peut forger. `publish` copie la sortie, puis ne valide et ne pousse que sa copie. | Scénario 7 (#111) : un faux agent annonce sa fin puis réécrit sa sortie. |
   | Le point d'entrée de l'image du proxy démarre en root, avec `SETUID` et `SETGID` seulement. | Test statique (#110), puis recette humaine. |
   | Docker Desktop ne garantit ni le mode `isolated` du réseau des agents, ni le `mode` des fichiers de secrets. | Documentation (`docs/compose.md`) : Docker Desktop sert à l'essai, pas au déploiement. |

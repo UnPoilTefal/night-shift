@@ -35,11 +35,13 @@ e9)
 	;;
 hostile)
 	# Un agent qui voudrait préparer le tour suivant : un hook dans sa
-	# configuration, un fichier sous HOME et un processus qui lui survit.
+	# configuration, un fichier sous HOME et TMPDIR, et un processus qui lui
+	# survit.
 	echo x > f.txt && git add f.txt && git commit -q -m "feat: x"
 	transcript
 	echo '{"hooks":{}}' > "$CLAUDE_CONFIG_DIR/settings.json"
 	echo planted > "$HOME/planted"
+	echo planted > "${TMPDIR:-/tmp}/planted"
 	sleep 300 >/dev/null 2>&1 &
 	echo $! > "$FAKE_CLAUDE_LOG/background.pid"
 	;;

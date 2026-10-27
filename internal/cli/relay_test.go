@@ -30,15 +30,16 @@ func (w *world) relaySelect(t *testing.T, srv *relaytest.Server, roundTimeout st
 }
 
 // relayAgent fait tourner l'agent en relais sur les volumes donnés, avec
-// HOME et CLAUDE_CONFIG_DIR propres au test ; il les rend.
-func (w *world) relayAgent(t *testing.T, mode, state, work string) (home, config string) {
+// HOME, CLAUDE_CONFIG_DIR et TMPDIR propres au test ; il les rend.
+func (w *world) relayAgent(t *testing.T, mode, state, work string) (home, config, tmp string) {
 	t.Helper()
 	for _, k := range cli.ForgeSecretEnv() {
 		t.Setenv(k, "")
 	}
-	home, config = t.TempDir(), t.TempDir()
+	home, config, tmp = t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	t.Setenv("TMPDIR", tmp)
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-secret")
 	t.Setenv("FAKE_CLAUDE", mode)
 	t.Setenv("FAKE_CLAUDE_LOG", w.log)
@@ -50,7 +51,7 @@ func (w *world) relayAgent(t *testing.T, mode, state, work string) (home, config
 	if code != 0 {
 		t.Fatalf("agent : code %d\n%s\n%s", code, stdout, stderr)
 	}
-	return home, config
+	return home, config, tmp
 }
 
 // steps rend les événements d'une passe sous la forme étape:type.
@@ -100,7 +101,7 @@ func TestRelayCarriesAPassFromClaimToPassFinished(t *testing.T) {
 		t.Fatalf("tâche = %+v, %v, %v ; attendu la passe réclamée", task, ok, err)
 	}
 
-	home, config := w.relayAgent(t, "hostile", w.state, w.work)
+	home, config, tmp := w.relayAgent(t, "hostile", w.state, w.work)
 
 	if done, ok, err := relay.ReadDone(filepath.Join(w.work, "out")); err != nil || !ok || !done.Matches(turn) {
 		t.Fatalf("fin annoncée = %+v, %v, %v", done, ok, err)
@@ -108,7 +109,7 @@ func TestRelayCarriesAPassFromClaimToPassFinished(t *testing.T) {
 	if !killedAfterDone {
 		t.Fatal("les autres processus doivent être tués après l'annonce de fin")
 	}
-	for _, dir := range []string{home, config} {
+	for _, dir := range []string{home, config, tmp} {
 		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 			t.Fatalf("%s n'est pas vide après le tour : %v", dir, entries)
 		}
