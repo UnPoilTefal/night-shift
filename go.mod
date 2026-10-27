@@ -3,7 +3,7 @@ module github.com/UnPoilTefal/night-shift
 go 1.26.0
 
 require (
-	github.com/bmatcuk/doublestar/v4 v4.10.3
+	github.com/bmatcuk/doublestar/v4 v4.10.4
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
 	github.com/robfig/cron/v3 v3.0.1
