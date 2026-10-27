@@ -41,6 +41,16 @@ var credentialEnv = map[Auth]string{ // #nosec G101 -- noms de variables, pas de
 	APIKey:       "ANTHROPIC_API_KEY",
 }
 
+// CredentialEnv rend les variables des moyens d'authentification.
+func CredentialEnv() []string {
+	out := make([]string, 0, len(credentialEnv))
+	for _, v := range credentialEnv {
+		out = append(out, v)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // DefaultAllowedTools sont les outils permis à l'agent quand rien d'autre
 // n'est configuré : lire et éditer le dépôt, et lancer git, go et make.
 var DefaultAllowedTools = []string{"Read", "Edit", "Write", "Glob", "Grep", "Skill", "Bash(git *)", "Bash(go *)", "Bash(make *)"}
@@ -226,7 +236,8 @@ func retry(task harness.Task) string {
 }
 
 // env construit l'environnement de l'agent : celui de départ, sans aucun
-// jeton de forge ni autre moyen d'authentification que celui choisi, et avec
+// jeton de forge, ni autre moyen d'authentification que celui choisi, ni
+// variable …_FILE qui désignerait le fichier d'un secret, et avec
 // l'identité git que la forge de code attribue à l'agent. Une tâche qui n'en
 // porte pas signe d'une adresse réservée, qui ne désigne personne.
 func (c Claude) env(id forge.Identity) ([]string, error) {
@@ -245,7 +256,7 @@ func (c Claude) env(id forge.Identity) ([]string, error) {
 		if k == name {
 			credential = v
 		}
-		if !slices.Contains(drop, k) {
+		if !slices.Contains(drop, k) && !strings.HasSuffix(k, "_FILE") {
 			env = append(env, kv)
 		}
 	}

@@ -110,6 +110,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Replayable zone-refusal proof against a real forge: `make e9-replay` replays the attack that led to it on a sandbox repository ([#75](https://github.com/UnPoilTefal/night-shift/issues/75))
 - [x] Agent configuration fresh on every round, transcripts archived by the trusted steps only ([#104](https://github.com/UnPoilTefal/night-shift/issues/104))
 - [x] Fixed refusals for irreversible actions (push, merge, editing a ticket or PR body), passed to the agent whatever the allowed tools; defence in depth on top of the agent having no write token ([#115](https://github.com/UnPoilTefal/night-shift/issues/115))
+- [x] Every secret readable from a file (`…_FILE`), so a deployment can keep secrets out of the environment ([#107](https://github.com/UnPoilTefal/night-shift/issues/107))
 - [ ] Outcomes and weekly digest ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
@@ -180,6 +181,8 @@ NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift publish --follow-up --state /state2 -
 | Change request | Draft pull request | Merge request titled `Draft: …`, source branch kept |
 | CI rounds read | Check runs and commit statuses | Jobs of the commit's latest pipeline, trigger jobs of child pipelines included, with the end of each failed job's log; for merged results pipelines, the merge request's head pipeline |
 | Trusted authors | Owners, members and collaborators | Project members with the Developer role or above, direct or inherited from a group |
+
+**Secrets as files.** Every secret variable also has a file form: `NIGHT_SHIFT_GITHUB_TOKEN_FILE`, `NIGHT_SHIFT_GITLAB_TOKEN_FILE`, `NIGHT_SHIFT_DISCORD_WEBHOOK_FILE`, `CLAUDE_CODE_OAUTH_TOKEN_FILE` and `ANTHROPIC_API_KEY_FILE` each name a file that holds the secret. The token variable of any future forge adapter gets the same form. A step reads the file when it starts and drops its final newline; an empty file counts as no secret. Setting both forms of one secret is a usage error (exit code 2), and an unreadable file is an error that names the variable, never its content. The agent step passes a model token read from its file to `claude` under the variable it expects, never forwards any `…_FILE` variable, and refuses to start when it sees the file form of a forge token or of the webhook, even one that points to a missing file. Environment variables keep working as before. With the `CronJob`, you may mount the `Secret` as a volume and point the `…_FILE` variable at it instead of using `secretKeyRef`.
 | Blocked tickets | Native issue dependencies | `is blocked by` links where the edition has them, plus a `Blocked by: #n, #m` line in the issue body |
 
 On GitLab, use a project or group access token with the Developer role and the `api` and `write_repository` scopes. night-shift creates the lifecycle labels and `sensitive-zone` in the project when they are missing. TLS is always verified: for an instance behind an internal certificate authority, add that authority to the container's certificate store.

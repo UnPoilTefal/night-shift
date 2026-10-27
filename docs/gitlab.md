@@ -11,7 +11,7 @@ Start from [`examples/solo/cronjob-gitlab.yaml`](../examples/solo/cronjob-gitlab
 - `--forge gitlab` on `select` and both `publish` steps;
 - `--instance https://gitlab.example.com` on the same steps. The adapter derives the API (`<base>/api/v4`) and the clone addresses (`<base>`) from that one base, relative root included (`https://example.com/gitlab`), so the token can never be sent to another host. Remove it for gitlab.com;
 - `--repo` with the full project path, subgroups included: `group/subgroup/project`;
-- the token in `NIGHT_SHIFT_GITLAB_TOKEN`, mounted **only** in `select` and both `publish` steps. A test in the repository fails if an agent step receives it.
+- the token in `NIGHT_SHIFT_GITLAB_TOKEN`, or in a file named by `NIGHT_SHIFT_GITLAB_TOKEN_FILE` (for example a `Secret` mounted as a volume), mounted **only** in `select` and both `publish` steps. A test in the repository fails if an agent step receives it, and the agent step refuses to start if it sees either form.
 
 ### Never run a pass in a CI job
 
