@@ -109,6 +109,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Zone refusal: Publication checks every commit against the base branch's opt-in before each push, so the opt-in file is the only thing a target repository needs ([#67](https://github.com/UnPoilTefal/night-shift/issues/67), [ADR 0011](docs/adr/0011-publication-frontiere-des-zones.md))
 - [x] Replayable zone-refusal proof against a real forge: `make e9-replay` replays the attack that led to it on a sandbox repository ([#75](https://github.com/UnPoilTefal/night-shift/issues/75))
 - [x] Agent configuration fresh on every round, transcripts archived by the trusted steps only ([#104](https://github.com/UnPoilTefal/night-shift/issues/104))
+- [x] Fixed refusals for irreversible actions (push, merge, editing a ticket or PR body), passed to the agent whatever the allowed tools; defence in depth on top of the agent having no write token ([#115](https://github.com/UnPoilTefal/night-shift/issues/115))
 - [ ] Outcomes and weekly digest ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
@@ -145,6 +146,8 @@ NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift select --repo owner/repo --state /sta
 
 # 2. Agent (no forge token; refuses to start if a variable carries one, by name or by shape): run /implement through claude -p.
 #    --auth subscription reads CLAUDE_CODE_OAUTH_TOKEN, --auth api-key reads ANTHROPIC_API_KEY.
+#    --allowed-tools widens what the agent may run, but pushing, merging and editing a ticket or PR body
+#    (git push, gh pr merge, gh issue edit, glab mr update…) are always denied, whatever it allows.
 CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state --work /work --timeout 30m
 
 # 3. Publication (forge token, no model): apply the commit series on agent/<n>-<slug>,
