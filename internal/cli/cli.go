@@ -17,6 +17,7 @@ Commandes :
   agent     étape 2 : fait travailler claude -p sur le clone (aucun jeton de forge)
   publish   étape 3 : publie la série de l'agent en PR brouillon, suit la CI, prépare une relance ou rend le ticket (jeton de forge)
   zones     check des zones sur le diff d'une PR d'agent
+  control   service de contrôle hors Kubernetes : déclenche les passes, relaie les étapes, tient l'historique
 `
 
 // Run exécute la commande désignée par args (sans le nom du binaire) et rend
@@ -41,6 +42,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runPublish(args[1:], stdout, stderr)
 	case "zones":
 		return runZones(args[1:], stdout, stderr)
+	case "control":
+		return runControl(args[1:], stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "commande inconnue : %q\n\n%s", args[0], usage)
 		return 2
