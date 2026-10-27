@@ -84,6 +84,7 @@ func (c *Client) GitAccess(repo string) forge.GitAccess {
 
 type issue struct {
 	Number      int       `json:"number"`
+	HTMLURL     string    `json:"html_url"`
 	Title       string    `json:"title"`
 	Body        string    `json:"body"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -135,25 +136,164 @@ func (c *Client) ReadyTickets(ctx context.Context, repo string) ([]forge.Ticket,
 			if i.PullRequest != nil {
 				continue
 			}
-			t := forge.Ticket{
-				Repo: repo, Number: i.Number, Title: i.Title, Body: i.Body,
-				Author: i.User.Login, AuthorAssociated: associated(i.Association), CreatedAt: i.CreatedAt,
-			}
-			for _, l := range i.Labels {
-				t.Labels = append(t.Labels, l.Name)
-			}
-			if i.Dependencies != nil {
-				t.OpenBlockers = i.Dependencies.BlockedBy
-			}
-			comments, err := c.comments(ctx, repo, i.Number)
+			t, err := c.ticket(ctx, repo, i)
 			if err != nil {
 				return nil, err
 			}
-			t.Comments = comments
 			ts = append(ts, t)
 		}
 		if len(batch) < 100 {
 			return ts, nil
+		}
+	}
+}
+
+// ticket traduit une issue en ticket, avec ses commentaires.
+func (c *Client) ticket(ctx context.Context, repo string, i issue) (forge.Ticket, error) {
+	t := forge.Ticket{
+		Repo: repo, Number: i.Number, Title: i.Title, Body: i.Body,
+		Author: i.User.Login, AuthorAssociated: associated(i.Association), CreatedAt: i.CreatedAt,
+	}
+	for _, l := range i.Labels {
+		t.Labels = append(t.Labels, l.Name)
+	}
+	if i.Dependencies != nil {
+		t.OpenBlockers = i.Dependencies.BlockedBy
+	}
+	comments, err := c.comments(ctx, repo, i.Number)
+	if err != nil {
+		return forge.Ticket{}, err
+	}
+	t.Comments = comments
+	return t, nil
+}
+
+// UpdatedTickets implémente forge.TicketSource par le filtre since de l'API
+// des issues, qui porte sur leur date de mise à jour ; les PR sont écartées.
+func (c *Client) UpdatedTickets(ctx context.Context, repo string, since time.Time) ([]forge.Ticket, error) {
+	var ts []forge.Ticket
+	q := url.Values{"state": {"all"}, "since": {since.UTC().Format(time.RFC3339)}, "per_page": {"100"}}
+	for page := 1; ; page++ {
+		q.Set("page", fmt.Sprint(page))
+		var batch []issue
+		if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/issues?"+q.Encode(), nil, &batch); err != nil {
+			return nil, err
+		}
+		for _, i := range batch {
+			if i.PullRequest != nil {
+				continue
+			}
+			t, err := c.ticket(ctx, repo, i)
+			if err != nil {
+				return nil, err
+			}
+			ts = append(ts, t)
+		}
+		if len(batch) < 100 {
+			return ts, nil
+		}
+	}
+}
+
+// PutIssue implémente forge.TicketSource : l'issue ouverte de même label et
+// de même titre voit son corps remplacé ; sinon une issue est ouverte avec
+// le label, que GitHub crée s'il n'existe pas.
+func (c *Client) PutIssue(ctx context.Context, repo, label, title, body string) (int, string, error) {
+	q := url.Values{"state": {"open"}, "labels": {label}, "per_page": {"100"}}
+	for page := 1; ; page++ {
+		q.Set("page", fmt.Sprint(page))
+		var batch []issue
+		if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/issues?"+q.Encode(), nil, &batch); err != nil {
+			return 0, "", err
+		}
+		for _, i := range batch {
+			if i.PullRequest == nil && i.Title == title {
+				var out issue
+				if err := c.do(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/issues/%d", repo, i.Number), map[string]string{"body": body}, &out); err != nil {
+					return 0, "", err
+				}
+				return out.Number, out.HTMLURL, nil
+			}
+		}
+		if len(batch) < 100 {
+			break
+		}
+	}
+	var out issue
+	if err := c.do(ctx, http.MethodPost, "/repos/"+repo+"/issues", map[string]any{"title": title, "body": body, "labels": []string{label}}, &out); err != nil {
+		return 0, "", err
+	}
+	return out.Number, out.HTMLURL, nil
+}
+
+type pull struct {
+	Number    int        `json:"number"`
+	HTMLURL   string     `json:"html_url"`
+	State     string     `json:"state"`
+	CreatedAt time.Time  `json:"created_at"`
+	ClosedAt  *time.Time `json:"closed_at"`
+	MergedAt  *time.Time `json:"merged_at"`
+	Head      struct {
+		Ref string `json:"ref"`
+	} `json:"head"`
+}
+
+// AgentChangeRequests implémente forge.CodeForge par les PR du dépôt, les
+// plus récentes d'abord ; une PR fermée avec une date de merge est mergée.
+func (c *Client) AgentChangeRequests(ctx context.Context, repo string) ([]forge.ChangeRequestStatus, error) {
+	var out []forge.ChangeRequestStatus
+	q := url.Values{"state": {"all"}, "sort": {"created"}, "direction": {"desc"}, "per_page": {"100"}}
+	for page := 1; ; page++ {
+		q.Set("page", fmt.Sprint(page))
+		var batch []pull
+		if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/pulls?"+q.Encode(), nil, &batch); err != nil {
+			return nil, err
+		}
+		for _, p := range batch {
+			if !strings.HasPrefix(p.Head.Ref, forge.AgentBranchPrefix) {
+				continue
+			}
+			s := forge.ChangeRequestStatus{Number: p.Number, URL: p.HTMLURL, Head: p.Head.Ref, State: forge.ChangeOpen, CreatedAt: p.CreatedAt}
+			switch {
+			case p.MergedAt != nil:
+				s.State, s.ClosedAt = forge.ChangeMerged, *p.MergedAt
+			case p.State == "closed":
+				s.State = forge.ChangeClosed
+				if p.ClosedAt != nil {
+					s.ClosedAt = *p.ClosedAt
+				}
+			}
+			out = append(out, s)
+			if len(out) == forge.MaxAgentChangeRequests {
+				return out, nil
+			}
+		}
+		// Au-delà de quelques pages, les PR sont trop anciennes pour une
+		// semaine ou un palier.
+		if len(batch) < 100 || page == 5 {
+			return out, nil
+		}
+	}
+}
+
+// ChangeRequestCommits implémente forge.CodeForge ; GitHub rend au plus 250
+// commits d'une PR.
+func (c *Client) ChangeRequestCommits(ctx context.Context, repo string, number int) ([]string, error) {
+	var out []string
+	for page := 1; ; page++ {
+		var batch []struct {
+			Commit struct {
+				Message string `json:"message"`
+			} `json:"commit"`
+		}
+		if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/pulls/%d/commits?per_page=100&page=%d", repo, number, page), nil, &batch); err != nil {
+			return nil, err
+		}
+		for _, b := range batch {
+			out = append(out, b.Commit.Message)
+		}
+		if len(batch) < 100 {
+			return out, nil
 		}
 	}
 }

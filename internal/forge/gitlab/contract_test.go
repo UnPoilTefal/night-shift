@@ -3,6 +3,7 @@ package gitlab_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/forge/forgetest"
@@ -75,6 +76,11 @@ func (f *fixture) SetChecks(repo, sha string, checks ...forge.Check) {
 		jobs = append(jobs, j)
 	}
 	f.srv.SetPipeline(repo, sha, status, jobs...)
+}
+
+func (f *fixture) SetChange(repo string, number int, state forge.ChangeRequestState, at time.Time, commits ...string) {
+	s := map[forge.ChangeRequestState]string{forge.ChangeOpen: "opened", forge.ChangeMerged: "merged", forge.ChangeClosed: "closed"}[state]
+	f.srv.SetMergeRequestState(repo, number, s, at, commits...)
 }
 
 func (f *fixture) Ticket(repo string, number int) forgetest.Ticket {

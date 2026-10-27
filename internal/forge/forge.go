@@ -102,6 +102,37 @@ type Draft struct {
 	Branch string
 }
 
+// ChangeRequestState est l'état d'une demande de changement.
+type ChangeRequestState string
+
+// États d'une demande de changement.
+const (
+	ChangeOpen   ChangeRequestState = "open"
+	ChangeMerged ChangeRequestState = "merged"
+	ChangeClosed ChangeRequestState = "closed"
+)
+
+// AgentBranchPrefix préfixe les branches que pousse la Publication :
+// agent/<n>-<slug>, où n est le numéro du ticket.
+const AgentBranchPrefix = "agent/"
+
+// ChangeRequestStatus est l'état d'une demande de changement ouverte depuis
+// une branche agent/.
+type ChangeRequestStatus struct {
+	Number int
+	URL    string
+	// Head est sa branche agent/.
+	Head  string
+	State ChangeRequestState
+	// CreatedAt date son ouverture ; ClosedAt son merge ou sa fermeture,
+	// zéro tant qu'elle est ouverte.
+	CreatedAt, ClosedAt time.Time
+}
+
+// MaxAgentChangeRequests borne les demandes de changement que rend
+// CodeForge.AgentChangeRequests.
+const MaxAgentChangeRequests = 100
+
 // Identity signe des commits.
 type Identity struct {
 	Name, Email string
@@ -168,6 +199,16 @@ type TicketSource interface {
 	Comment(ctx context.Context, repo string, number int, body string) error
 	// CreateIssue ouvre une issue et rend son numéro et son URL.
 	CreateIssue(ctx context.Context, repo, title, body string) (number int, url string, err error)
+	// UpdatedTickets liste les tickets du dépôt, ouverts ou fermés, mis à
+	// jour depuis since (commentaire, label, fermeture…), avec leurs labels
+	// et leurs commentaires ; une demande de changement n'est jamais un
+	// ticket. La liste peut déborder la période : l'appelant date ce qu'il
+	// cherche par les commentaires.
+	UpdatedTickets(ctx context.Context, repo string, since time.Time) ([]Ticket, error)
+	// PutIssue ouvre l'issue title, qui porte label, ou met à jour le corps
+	// de l'issue ouverte qui porte déjà ce label et ce titre ; le label est
+	// créé s'il manque. Deux appels de même titre ne font qu'une issue.
+	PutIssue(ctx context.Context, repo, label, title, body string) (number int, url string, err error)
 }
 
 // CodeForge est le contrat qu'une passe attend de la forge de code qui
@@ -191,4 +232,12 @@ type CodeForge interface {
 	// Checks rend les checks de CI rapportés sur un commit, quel que soit
 	// leur état ; aucun check n'est encore rapporté juste après un push.
 	Checks(ctx context.Context, repo, sha string) ([]Check, error)
+	// AgentChangeRequests rend les demandes de changement du dépôt ouvertes
+	// depuis une branche agent/, quel que soit leur état, de la plus récente
+	// à la plus ancienne, au plus MaxAgentChangeRequests.
+	AgentChangeRequests(ctx context.Context, repo string) ([]ChangeRequestStatus, error)
+	// ChangeRequestCommits rend le message complet de chaque commit d'une
+	// demande de changement, du plus ancien au plus récent : leurs trailers
+	// disent qui les a écrits.
+	ChangeRequestCommits(ctx context.Context, repo string, number int) ([]string, error)
 }

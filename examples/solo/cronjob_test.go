@@ -382,3 +382,53 @@ func TestTrustedStagesShareOneForgeOneInstanceAndItsToken(t *testing.T) {
 		}
 	})
 }
+
+// modelEnv sont les variables du moyen d'authentification auprès du modèle.
+var modelEnv = []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"}
+
+func TestWeeklyCronJobMountsTheForgeTokenAndNoModelSecret(t *testing.T) {
+	pass := load(t, "cronjob.yaml").Spec.JobTemplate.Spec.Template.Spec
+	var modelSecrets []string
+	for _, c := range pass.InitContainers {
+		for _, e := range c.Env {
+			if slices.Contains(modelEnv, e.Name) && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+				modelSecrets = append(modelSecrets, e.ValueFrom.SecretKeyRef.Name)
+			}
+		}
+	}
+	if len(modelSecrets) == 0 {
+		t.Fatal("aucun secret du modèle trouvé dans le CronJob des passes")
+	}
+
+	cj := load(t, "cronjob-weekly.yaml")
+	spec := cj.Spec.JobTemplate.Spec.Template.Spec
+	if len(spec.InitContainers) != 0 || len(spec.Containers) != 1 {
+		t.Fatalf("conteneurs = %d + %d, attendu le seul conteneur weekly", len(spec.InitContainers), len(spec.Containers))
+	}
+	c := spec.Containers[0]
+	if !slices.Equal(c.Command, []string{"night-shift"}) || len(c.Args) == 0 || c.Args[0] != "weekly" || flagValue(c.Args, "--repo") == "" ||
+		!strings.HasPrefix(c.Image, "ghcr.io/unpoiltefal/night-shift:") {
+		t.Fatalf("weekly : image %q, command %q, args %q", c.Image, c.Command, c.Args)
+	}
+	if len(forgeSecrets(spec.Containers)) != 1 {
+		t.Fatal("weekly doit lire le jeton de forge")
+	}
+	for _, e := range c.Env {
+		if slices.Contains(modelEnv, e.Name) || (e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && slices.Contains(modelSecrets, e.ValueFrom.SecretKeyRef.Name)) {
+			t.Errorf("weekly reçoit un secret du modèle : %s", e.Name)
+		}
+	}
+	for _, ef := range c.EnvFrom {
+		if ef.SecretRef != nil && slices.Contains(modelSecrets, ef.SecretRef.Name) {
+			t.Errorf("weekly importe le secret du modèle %s", ef.SecretRef.Name)
+		}
+	}
+	for _, v := range spec.Volumes {
+		if (v.Secret != nil && slices.Contains(modelSecrets, v.Secret.SecretName)) || v.Projected != nil {
+			t.Errorf("weekly monte le volume %s, qui peut porter un secret du modèle", v.Name)
+		}
+	}
+	if cj.Spec.ConcurrencyPolicy != "Forbid" || spec.AutomountServiceAccountToken == nil || *spec.AutomountServiceAccountToken {
+		t.Fatal("weekly : une exécution à la fois, sans jeton de compte de service")
+	}
+}

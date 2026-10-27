@@ -16,6 +16,7 @@ Commandes :
   select    étape 1 : réserve un ticket et prépare le clone de travail (jeton de forge)
   agent     étape 2 : fait travailler claude -p sur le clone (aucun jeton de forge)
   publish   étape 3 : publie la série de l'agent en PR brouillon, suit la CI, prépare une relance ou rend le ticket (jeton de forge)
+  weekly    issue hebdomadaire par dépôt : Résultats lus sur la forge, taux de délégation, palier (jeton de forge)
   zones     check des zones sur le diff d'une PR d'agent
   control   service de contrôle hors Kubernetes : déclenche les passes, relaie les étapes, tient l'historique
 `
@@ -40,6 +41,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runAgent(args[1:], stdout, stderr)
 	case "publish":
 		return runPublish(args[1:], stdout, stderr)
+	case "weekly":
+		return runWeekly(args[1:], stdout, stderr)
 	case "zones":
 		return runZones(args[1:], stdout, stderr)
 	case "control":

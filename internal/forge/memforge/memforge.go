@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 )
@@ -20,16 +21,29 @@ type Issue struct {
 	forge.Ticket
 	Closed   bool
 	Comments []string
+
+	// posted date les commentaires de Comments, signés de night-shift ;
+	// updated est la dernière mise à jour du ticket.
+	posted  []forge.Comment
+	updated time.Time
 }
 
 // Change est l'état d'une demande de changement dans la forge en mémoire,
 // avec ses labels (ChangeRequest.Labels) et les commentaires que la passe y a
-// postés.
+// postés. State, ClosedAt et Commits se fixent par SetChange.
 type Change struct {
 	forge.ChangeRequest
-	Number   int
-	Comments []string
+	Number    int
+	Comments  []string
+	State     forge.ChangeRequestState
+	CreatedAt time.Time
+	ClosedAt  time.Time
+	Commits   []string
 }
+
+// Bot signe les commentaires que la passe poste dans la forge en mémoire ;
+// il est associé au dépôt, comme le compte du jeton.
+const Bot = "night-shift"
 
 // Forge implémente forge.TicketSource et forge.CodeForge en mémoire, sûre en
 // accès concurrent.
@@ -40,6 +54,8 @@ type Forge struct {
 	// GitURL est la base des adresses de clone que rend GitAccess : un
 	// dossier de dépôts nus pour les tests.
 	GitURL string
+	// Now date les mises à jour et les commentaires (time.Now s'il est nul).
+	Now func() time.Time
 
 	mu      sync.Mutex
 	files   map[string]map[string][]byte
@@ -72,7 +88,11 @@ func (f *Forge) SetFile(repo, path, content string) {
 func (f *Forge) AddIssue(t forge.Ticket) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.issues[t.Repo] = append(f.issues[t.Repo], &Issue{Ticket: t})
+	updated := t.CreatedAt
+	for _, c := range t.Comments {
+		updated = later(updated, later(c.CreatedAt, c.UpdatedAt))
+	}
+	f.issues[t.Repo] = append(f.issues[t.Repo], &Issue{Ticket: t, updated: updated})
 	for _, l := range t.Labels {
 		f.define(t.Repo, l)
 	}
@@ -84,6 +104,17 @@ func (f *Forge) CloseIssue(repo string, number int) {
 	defer f.mu.Unlock()
 	if i := f.find(repo, number); i != nil {
 		i.Closed = true
+		i.updated = f.now()
+	}
+}
+
+// SetChange fixe l'état d'une demande de changement, la date de son merge
+// ou de sa fermeture, et les messages de ses commits.
+func (f *Forge) SetChange(repo string, number int, state forge.ChangeRequestState, at time.Time, commits ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c := f.findChange(repo, number); c != nil {
+		c.State, c.ClosedAt, c.Commits = state, at, commits
 	}
 }
 
@@ -105,6 +136,7 @@ func (f *Forge) Issue(repo string, number int) Issue {
 	c := *i
 	c.Labels = slices.Clone(i.Labels)
 	c.Comments = slices.Clone(i.Comments)
+	c.posted = slices.Clone(i.posted)
 	return c
 }
 
@@ -150,6 +182,7 @@ func (f *Forge) AddLabel(ctx context.Context, repo string, number int, label str
 		return fmt.Errorf("ticket %s#%d inconnu", repo, number)
 	}
 	i.Labels = f.label(repo, i.Labels, label)
+	i.updated = f.now()
 	return nil
 }
 
@@ -165,6 +198,7 @@ func (f *Forge) RemoveLabel(ctx context.Context, repo string, number int, label 
 		return fmt.Errorf("ticket %s#%d inconnu", repo, number)
 	}
 	i.Labels = slices.DeleteFunc(i.Labels, func(l string) bool { return l == label })
+	i.updated = f.now()
 	return nil
 }
 
@@ -179,8 +213,55 @@ func (f *Forge) Comment(ctx context.Context, repo string, number int, body strin
 	if i == nil {
 		return fmt.Errorf("ticket %s#%d inconnu", repo, number)
 	}
+	now := f.now()
 	i.Comments = append(i.Comments, body)
+	i.posted = append(i.posted, forge.Comment{Author: Bot, Associated: true, Body: body, CreatedAt: now})
+	i.updated = now
 	return nil
+}
+
+// UpdatedTickets implémente forge.TicketSource : les commentaires rendus
+// sont ceux de l'état initial, puis ceux que la passe a postés, signés de
+// Bot.
+func (f *Forge) UpdatedTickets(ctx context.Context, repo string, since time.Time) ([]forge.Ticket, error) {
+	if err := f.hook(ctx, "UpdatedTickets"); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ts []forge.Ticket
+	for _, i := range f.issues[repo] {
+		if i.updated.Before(since) {
+			continue
+		}
+		t := i.Ticket
+		t.Labels = slices.Clone(i.Labels)
+		t.Comments = append(slices.Clone(i.Ticket.Comments), i.posted...)
+		ts = append(ts, t)
+	}
+	return ts, nil
+}
+
+// PutIssue implémente forge.TicketSource.
+func (f *Forge) PutIssue(ctx context.Context, repo, label, title, body string) (int, string, error) {
+	if err := f.hook(ctx, "PutIssue"); err != nil {
+		return 0, "", err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, i := range f.issues[repo] {
+		if !i.Closed && i.Title == title && slices.Contains(i.Labels, label) {
+			i.Body, i.updated = body, f.now()
+			return i.Number, fmt.Sprintf("memforge://%s/issues/%d", repo, i.Number), nil
+		}
+	}
+	n := f.next(repo)
+	f.issues[repo] = append(f.issues[repo], &Issue{
+		Ticket:  forge.Ticket{Repo: repo, Number: n, Title: title, Body: body, Author: Bot, AuthorAssociated: true, CreatedAt: f.now(), Labels: f.label(repo, nil, label)},
+		updated: f.now(),
+	})
+	f.created[repo] = append(f.created[repo], n)
+	return n, fmt.Sprintf("memforge://%s/issues/%d", repo, n), nil
 }
 
 // CreateIssue implémente forge.TicketSource ; l'URL rendue est
@@ -235,8 +316,45 @@ func (f *Forge) OpenChangeRequest(ctx context.Context, repo string, cr forge.Cha
 	for _, l := range labels {
 		cr.Labels = f.label(repo, cr.Labels, l)
 	}
-	f.changes[repo] = append(f.changes[repo], &Change{ChangeRequest: cr, Number: n})
+	f.changes[repo] = append(f.changes[repo], &Change{ChangeRequest: cr, Number: n, State: forge.ChangeOpen, CreatedAt: f.now()})
 	return n, fmt.Sprintf("memforge://%s/pull/%d", repo, n), nil
+}
+
+// AgentChangeRequests implémente forge.CodeForge.
+func (f *Forge) AgentChangeRequests(ctx context.Context, repo string) ([]forge.ChangeRequestStatus, error) {
+	if err := f.hook(ctx, "AgentChangeRequests"); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []forge.ChangeRequestStatus
+	for _, c := range slices.Backward(f.changes[repo]) {
+		if !strings.HasPrefix(c.Head, forge.AgentBranchPrefix) {
+			continue
+		}
+		out = append(out, forge.ChangeRequestStatus{
+			Number: c.Number, URL: fmt.Sprintf("memforge://%s/pull/%d", repo, c.Number), Head: c.Head,
+			State: c.State, CreatedAt: c.CreatedAt, ClosedAt: c.ClosedAt,
+		})
+		if len(out) == forge.MaxAgentChangeRequests {
+			break
+		}
+	}
+	return out, nil
+}
+
+// ChangeRequestCommits implémente forge.CodeForge.
+func (f *Forge) ChangeRequestCommits(ctx context.Context, repo string, number int) ([]string, error) {
+	if err := f.hook(ctx, "ChangeRequestCommits"); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.findChange(repo, number)
+	if c == nil {
+		return nil, fmt.Errorf("demande de changement %s#%d inconnue", repo, number)
+	}
+	return slices.Clone(c.Commits), nil
 }
 
 // CommentChangeRequest implémente forge.CodeForge.
@@ -349,6 +467,20 @@ func (f *Forge) next(repo string) int {
 		n = max(n, c.Number+1)
 	}
 	return n
+}
+
+func (f *Forge) now() time.Time {
+	if f.Now != nil {
+		return f.Now()
+	}
+	return time.Now()
+}
+
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 func (f *Forge) findChange(repo string, number int) *Change {
