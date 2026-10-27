@@ -204,6 +204,83 @@ func (d Dirs) ReadResult() (harness.Result, bool, error) {
 	return res, true, nil
 }
 
+// CopyOut copie la sortie de l'agent dans dst, avec les bornes de
+// ReadResult, et rend les volumes où la lire : la tâche reste celle de d, la
+// sortie est la copie. Ce que l'agent change dans sa sortie après la copie
+// n'a plus d'effet : la Publication ne valide et ne pousse que la copie.
+// Sans sortie, la copie est vide et ReadResult n'y trouve aucun résultat.
+func (d Dirs) CopyOut(dst string) (Dirs, error) {
+	c := Dirs{State: d.State, Work: dst}
+	if err := realDir(d.OutDir()); errors.Is(err, os.ErrNotExist) {
+		return c, nil
+	} else if err != nil {
+		return c, err
+	}
+	if err := os.MkdirAll(c.patchDir(), 0o700); err != nil {
+		return c, err
+	}
+	if err := copyRegular(d.resultFile(), c.resultFile(), 1<<20); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return c, err
+	}
+	transcript := filepath.Join(d.OutDir(), harness.TranscriptFile)
+	if err := copyRegular(transcript, filepath.Join(c.OutDir(), harness.TranscriptFile), harness.MaxTranscriptBytes); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return c, err
+	}
+	if err := realDir(d.patchDir()); errors.Is(err, os.ErrNotExist) {
+		return c, nil
+	} else if err != nil {
+		return c, err
+	}
+	entries, err := os.ReadDir(d.patchDir())
+	if err != nil {
+		return c, err
+	}
+	if len(entries) > MaxPatches {
+		return c, fmt.Errorf("série de %d patchs, au plus %d", len(entries), MaxPatches)
+	}
+	var total int64
+	for _, e := range entries {
+		if !patchName.MatchString(e.Name()) {
+			return c, fmt.Errorf("fichier inattendu dans la série : %q", truncate(e.Name(), 100))
+		}
+		n, err := copyCounted(filepath.Join(d.patchDir(), e.Name()), filepath.Join(c.patchDir(), e.Name()), MaxPatchBytes)
+		if err != nil {
+			return c, err
+		}
+		if total += n; total > MaxSeriesBytes {
+			return c, fmt.Errorf("série de plus de %d octets", MaxSeriesBytes)
+		}
+	}
+	return c, nil
+}
+
+// copyRegular copie un fichier ordinaire d'au plus limit octets, sans suivre
+// de lien symbolique.
+func copyRegular(src, dst string, limit int64) error {
+	_, err := copyCounted(src, dst, limit)
+	return err
+}
+
+func copyCounted(src, dst string, limit int64) (int64, error) {
+	in, err := openRegular(src, limit)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- chemin construit ici
+	if err != nil {
+		return 0, err
+	}
+	n, err := io.Copy(out, io.LimitReader(in, limit+1))
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil && n > limit {
+		err = fmt.Errorf("%s dépasse %d octets", filepath.Base(src), limit)
+	}
+	return n, err
+}
+
 // ArchiveTranscript copie tel quel le transcript rendu par l'agent dans le
 // dossier d'archive, monté par les seules étapes de confiance, et rend son
 // chemin. Le nom de l'archive vient de la tâche, écrite par une étape de
