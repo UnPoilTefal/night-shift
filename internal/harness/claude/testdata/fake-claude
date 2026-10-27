@@ -1,10 +1,12 @@
 #!/bin/sh
 # Doublure de « claude -p » : elle consigne ses arguments, son environnement
-# et son prompt dans $FAKE_CLAUDE_LOG, puis se comporte selon $FAKE_CLAUDE.
+# et son prompt dans $FAKE_CLAUDE_LOG, puis se comporte selon $FAKE_CLAUDE,
+# ou, sans lui, selon la ligne « fake-claude: <mode> » du brief.
 printf '%s\n' "$@" > "$FAKE_CLAUDE_LOG/args"
 env > "$FAKE_CLAUDE_LOG/env"
 cat > "$FAKE_CLAUDE_LOG/prompt"
 pwd > "$FAKE_CLAUDE_LOG/cwd"
+mode=${FAKE_CLAUDE:-$(sed -n 's/^fake-claude: *\([a-z0-9-]*\).*/\1/p' "$FAKE_CLAUDE_LOG/prompt" | head -n 1)}
 
 # transcript écrit la session s-1 dans le dossier de configuration, sauf
 # avec FAKE_CLAUDE_TRANSCRIPT=none ; =big la rend plus grosse que le plafond.
@@ -18,14 +20,56 @@ transcript() {
 }
 
 ok='{"type":"result","subtype":"success","is_error":false,"result":"fini","session_id":"s-1","total_cost_usd":0.25,"duration_ms":1234}'
-case "$FAKE_CLAUDE" in
+case "$mode" in
 commit)
 	echo x > f.txt && git add f.txt && git commit -q -m "feat: x" -m "Corps."
 	echo y > g.txt && git add g.txt && git commit -q -m "test: y"
 	transcript
 	;;
+red)
+	# Une série que la CI simulée juge en échec, tant que ci-red y figure.
+	echo x > f.txt && echo rouge > ci-red && git add f.txt ci-red && git commit -q -m "feat: x"
+	transcript
+	;;
 fix)
+	git rm -q --ignore-unmatch ci-red
 	echo z > h.txt && git add h.txt && git commit -q -m "fix: h"
+	transcript
+	;;
+early-done)
+	# Un agent qui annonce sa fin avant d'avoir fini, puis réécrit sa
+	# sortie : seule la série copiée par publish à l'annonce doit compter.
+	echo x > f.txt && git add f.txt && git commit -q -m "feat: x"
+	transcript
+	out=$(dirname "$PWD")/out
+	mkdir -p "$out/patches"
+	git format-patch -q --stdout -1 HEAD > "$out/patches/0001.patch"
+	echo '{"outcome":"succeeded","reason":"","agent":"claude","costUSD":0,"duration":0,"sessionID":"s-1","transcript":""}' > "$out/result.json"
+	for turn in /state/turn.json /state2/turn.json; do
+		[ -f "$turn" ] || continue
+		pass=$(sed -n 's/.*"pass":"\([^"]*\)".*/\1/p' "$turn")
+		round=$(sed -n 's/.*"round":\([0-9]*\).*/\1/p' "$turn")
+		printf '{"pass":"%s","round":%s}\n' "$pass" "$round" > "$out/done.json"
+	done
+	sleep "${FAKE_CLAUDE_EARLY_WAIT:-5}"
+	echo forged > forged.txt && git add forged.txt && git commit -q -m "feat: forged"
+	git format-patch -q --stdout -1 HEAD > "$out/patches/0001.patch"
+	;;
+probe)
+	# Ce que l'agent voit au début de son tour, commité dans probe.txt :
+	# restes d'un tour précédent, secrets des étapes de confiance.
+	{
+		[ -e "$HOME/planted" ] && echo "home=planted" || echo "home=clean"
+		[ -e "$CLAUDE_CONFIG_DIR/settings.json" ] && echo "config=planted" || echo "config=clean"
+		n=0
+		for f in /proc/[0-9]*/cmdline; do
+			[ "$(tr '\0' ' ' < "$f" 2>/dev/null)" = "sleep 300 " ] && n=$((n + 1))
+		done
+		echo "survivors=$n"
+		[ -e /run/secrets/forge_token ] && echo "forge_token=present" || echo "forge_token=absent"
+		echo "env=$(env | cut -d= -f1 | grep -E 'GITLAB|GITHUB|_FILE$|DISCORD' | sort | tr '\n' ',')"
+	} > probe.txt
+	git add probe.txt && git commit -q -m "test: probe"
 	transcript
 	;;
 e9)

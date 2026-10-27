@@ -11,7 +11,9 @@ The stack adds two services:
 
 The Docker daemon supervises everything (`restart: unless-stopped`). There is no Docker socket, no systemd and no host cron. The example has no script and no logic of its own.
 
-A static test ([`compose_test.go`](../examples/compose/compose_test.go)) checks `compose.yaml`, `squid.conf` and the allow-lists. It needs no Docker. It fails on any change that weakens a guarantee, and on any step option the binary does not know. An end-to-end test of the running stack is not there yet ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)).
+A static test ([`compose_test.go`](../examples/compose/compose_test.go)) checks `compose.yaml`, `squid.conf` and the allow-lists. It needs no Docker. It fails on any change that weakens a guarantee, and on any step option the binary does not know.
+
+An end-to-end test ([`test/compose`](../test/compose/compose_test.go), `make test-compose`) runs the real stack in CI against a fake GitLab started on the host, with a fake agent in place of Claude Code. Its override, [`compose.test.yaml`](../test/compose/compose.test.yaml), only lets the trusted steps reach that fake forge, and the static rules are applied to the merged configuration too. It plays nine scenarios: a full pass, a second round after red CI, a zone refusal, a network probe from the agents' network, the secrets, a hostile agent that tries to leave files and a process behind, an agent that forges its end, three manual requests during a pass, and the transcript archive ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)).
 
 ## Requirements
 
@@ -87,7 +89,9 @@ chmod 600 secrets/*
 
 All four files must exist: Compose refuses to start a stack whose secret file is missing. `secrets/` is ignored by git.
 
-**Readability.** Outside Swarm, Compose ignores the `uid`, `gid` and `mode` of a file secret: it bind-mounts the host file as is. The services run as UID 65532, so on Linux each file must be readable by that UID. For example, `sudo chown 65532:65532 secrets/* && sudo chmod 400 secrets/*`. A step that cannot read its secret says so and names the variable, never the content. This readability has to be checked on a real Linux host; the end-to-end test will check it ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)).
+**Readability.** Outside Swarm, Compose ignores the `uid`, `gid` and `mode` of a file secret: it bind-mounts the host file as is. The services run as UID 65532, so on Linux each file must be readable by that UID. For example, `sudo chown 65532:65532 secrets/* && sudo chmod 400 secrets/*`. A step that cannot read its secret says so and names the variable, never the content. The end-to-end test sets the secrets up this way and checks, on Linux in CI, that every service reads its own secrets as UID 65532 ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)).
+
+**Volumes.** A new named volume takes the owner of the directory it is mounted on in the image. The images create `/state`, `/work`, `/state2`, `/work2`, `/history` and `/transcripts` for UID 65532, so the steps can write to their volumes.
 
 ## Running
 
@@ -162,7 +166,7 @@ The stack keeps the `CronJob`'s guarantees: the agent holds no forge token, its 
 |---|---|
 | The agent container lives from one pass to the next. After each round, the binary, as PID 1, kills every other process and empties its `tmpfs` (`HOME`, `CLAUDE_CONFIG_DIR`, `/tmp`). | Scenario 6 of the end-to-end test ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)): a hostile fake agent leaves a process and files behind, and nothing survives to the next pass. |
 | The agent's end is a marker the agent can forge. `publish` copies the agent's output, then validates and pushes only its copy. | Scenario 7 ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)): a fake agent announces its end, then rewrites its output. |
-| The proxy image's entrypoint starts as root, with only `SETUID` and `SETGID`, then Squid switches to the `proxy` user. | The static test; then the maintainer's run on a real host. |
+| The proxy image's entrypoint starts as root, with only `SETUID` and `SETGID`, then Squid switches to the `proxy` user. | The static test; scenario 4 of the end-to-end test, where Squid runs as user `proxy` with these two capabilities and opens the tunnel; then the maintainer's run on a real host. |
 | Docker Desktop guarantees neither the `isolated` mode of the agents' network nor the `mode` of secret files. | This guide: Docker Desktop is for trying, not deploying. |
 | Whether UID 65532 can read the secrets depends on the host, and has to be checked on Linux. | Scenario 5 ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)). |
 | `control` needs a non-internal network (`admin-net`) to publish its administration API on `127.0.0.1`. That network gives it a route out, which it never uses: the binary makes no outbound call. | The static test: `admin-net` carries `control` alone, and only `127.0.0.1:8081` is published. |

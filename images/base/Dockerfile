@@ -59,6 +59,10 @@ ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
 	DISABLE_AUTOUPDATER=1
 
 RUN useradd --uid 65532 --user-group --create-home --home-dir /home/nightshift --shell /usr/sbin/nologin nightshift
+# Points de montage des volumes de l'exemple Compose : un volume nommé neuf
+# prend le propriétaire du dossier de l'image. Sans eux, il appartiendrait à
+# root, et aucune étape ne pourrait y écrire.
+RUN install -d -o 65532 -g 65532 -m 0700 /state /work /state2 /work2 /history /transcripts
 USER 65532:65532
 ENV HOME=/home/nightshift
 WORKDIR /home/nightshift
