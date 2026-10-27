@@ -160,7 +160,7 @@ The stack keeps the `CronJob`'s guarantees: the agent holds no forge token, its 
 
 | Gap | Checked by |
 |---|---|
-| The agent container lives from one pass to the next. After each round, the binary, as PID 1, kills every other process and empties its `tmpfs` (`HOME`, `CLAUDE_CONFIG_DIR`). | Scenario 6 of the end-to-end test ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)): a hostile fake agent leaves a process and files behind, and nothing survives to the next pass. |
+| The agent container lives from one pass to the next. After each round, the binary, as PID 1, kills every other process and empties its `tmpfs` (`HOME`, `CLAUDE_CONFIG_DIR`, `/tmp`). | Scenario 6 of the end-to-end test ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)): a hostile fake agent leaves a process and files behind, and nothing survives to the next pass. |
 | The agent's end is a marker the agent can forge. `publish` copies the agent's output, then validates and pushes only its copy. | Scenario 7 ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)): a fake agent announces its end, then rewrites its output. |
 | The proxy image's entrypoint starts as root, with only `SETUID` and `SETGID`, then Squid switches to the `proxy` user. | The static test; then the maintainer's run on a real host. |
 | Docker Desktop guarantees neither the `isolated` mode of the agents' network nor the `mode` of secret files. | This guide: Docker Desktop is for trying, not deploying. |

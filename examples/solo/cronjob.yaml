@@ -92,7 +92,7 @@ spec:
                 - {name: state, mountPath: /state, readOnly: true}
                 - {name: work, mountPath: /work}
                 - {name: agent-config, mountPath: /agent-config}
-                - {name: tmp, mountPath: /tmp}
+                - {name: agent-tmp, mountPath: /tmp}
               securityContext: *hardened
             - name: publish
               image: ghcr.io/unpoiltefal/night-shift:latest
@@ -117,7 +117,7 @@ spec:
                 - {name: state2, mountPath: /state2}
                 - {name: work2, mountPath: /work2}
                 - {name: transcripts, mountPath: /transcripts}
-                - {name: tmp, mountPath: /tmp}
+                - {name: publish-tmp, mountPath: /tmp}
               securityContext: *hardened
             - name: retry-agent
               image: ghcr.io/unpoiltefal/night-shift-go:latest
@@ -128,7 +128,7 @@ spec:
                 - {name: state2, mountPath: /state2, readOnly: true}
                 - {name: work2, mountPath: /work2}
                 - {name: retry-agent-config, mountPath: /agent-config}
-                - {name: tmp, mountPath: /tmp}
+                - {name: retry-agent-tmp, mountPath: /tmp}
               securityContext: *hardened
           containers:
             - name: retry-publish
@@ -141,7 +141,7 @@ spec:
                 - {name: state2, mountPath: /state2, readOnly: true}
                 - {name: work2, mountPath: /work2, readOnly: true}
                 - {name: transcripts, mountPath: /transcripts}
-                - {name: tmp, mountPath: /tmp}
+                - {name: retry-publish-tmp, mountPath: /tmp}
               securityContext: *hardened
           volumes:
             - {name: state, emptyDir: {}}
@@ -149,7 +149,12 @@ spec:
             # Volumes du tour de relance, écrits par publish.
             - {name: state2, emptyDir: {}}
             - {name: work2, emptyDir: {}}
-            - {name: tmp, emptyDir: {}}
+            # Un /tmp par étape : ce que l'agent y écrit n'atteint aucune
+            # étape de confiance, dont HOME et TMPDIR sont sous /tmp.
+            - {name: agent-tmp, emptyDir: {}}
+            - {name: publish-tmp, emptyDir: {}}
+            - {name: retry-agent-tmp, emptyDir: {}}
+            - {name: retry-publish-tmp, emptyDir: {}}
             # Configuration de l'agent, une par tour.
             - {name: agent-config, emptyDir: {}}
             - {name: retry-agent-config, emptyDir: {}}

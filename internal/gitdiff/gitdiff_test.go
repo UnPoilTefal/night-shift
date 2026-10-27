@@ -1,6 +1,8 @@
 package gitdiff_test
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -65,5 +67,26 @@ func TestOpenRejectsOptionLikeRevisions(t *testing.T) {
 		if _, err := gitdiff.Open(repo.Dir, rev, "main"); err == nil {
 			t.Fatalf("révision %q acceptée", rev)
 		}
+	}
+}
+
+func TestIgnoresTheGlobalConfigUnderHome(t *testing.T) {
+	repo := testgit.New(t)
+	repo.Write("README.md", "x\n")
+	repo.Commit("base")
+	// Un .gitconfig illisible fait échouer tout git qui le lit : celui
+	// qu'un agent aurait posé sous HOME ne doit pas être lu.
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[core\n\tfsmonitor = touch pwned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	r, err := gitdiff.Open(repo.Dir, "main", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := r.Head("README.md"); err != nil || !ok {
+		t.Fatalf("Head(README.md) : ok = %v, err = %v", ok, err)
 	}
 }

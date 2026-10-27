@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -93,9 +94,13 @@ func validRev(rev string) error {
 	return nil
 }
 
+// git exécute git dans dir, sans configuration système ni globale : un
+// .gitconfig posé sous HOME par un agent n'agit pas dans une étape de
+// confiance.
 func git(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...) //nolint:gosec // G204 : binaire fixe, révisions validées par validRev
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

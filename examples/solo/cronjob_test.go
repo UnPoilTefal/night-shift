@@ -254,6 +254,27 @@ func TestAgentConfigIsFreshEachRoundAndTranscriptsAreArchivedByTrustedStages(t *
 	})
 }
 
+// Une étape de confiance qui tourne après un agent ne monte en écriture
+// aucun volume que cet agent a pu écrire : sous HOME ou TMPDIR, un
+// .gitconfig ou un fichier posé par l'agent agirait avec le jeton de forge.
+func TestTrustedStagesWriteNoVolumeAnEarlierAgentWrote(t *testing.T) {
+	eachExample(t, func(t *testing.T, cj cronJob) {
+		spec := cj.Spec.JobTemplate.Spec.Template.Spec
+		written := map[string]string{}
+		for _, c := range append(slices.Clone(spec.InitContainers), spec.Containers...) {
+			agent := strings.HasSuffix(c.Name, "agent")
+			for _, m := range c.VolumeMounts {
+				switch {
+				case agent && !m.ReadOnly:
+					written[m.Name] = c.Name
+				case !agent && !m.ReadOnly && written[m.Name] != "":
+					t.Errorf("%s monte en écriture %s sur %s, que %s a pu écrire", c.Name, m.Name, m.MountPath, written[m.Name])
+				}
+			}
+		}
+	})
+}
+
 func TestStageVolumeFlagsPointAtTheirMounts(t *testing.T) {
 	eachExample(t, func(t *testing.T, cj cronJob) {
 		spec := cj.Spec.JobTemplate.Spec.Template.Spec
