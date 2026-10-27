@@ -640,7 +640,7 @@ func (s *stack) persistence(t *testing.T) {
 	if again := strings.TrimSpace(s.compose("ps", "--quiet", "agent")); again != agent {
 		t.Fatalf("le conteneur agent a changé (%s → %s) : le constat ne vaut rien", agent, again)
 	}
-	if seen["home"] != "clean" || seen["config"] != "clean" || seen["survivors"] != "0" {
+	if seen["home"] != "clean" || seen["config"] != "clean" || seen["tmp"] != "clean" || seen["survivors"] != "0" {
 		t.Errorf("au tour suivant, l'agent trouve %v ; attendu ni fichier ni processus", seen)
 	}
 }

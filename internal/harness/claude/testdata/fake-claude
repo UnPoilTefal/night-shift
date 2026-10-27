@@ -61,6 +61,7 @@ probe)
 	{
 		[ -e "$HOME/planted" ] && echo "home=planted" || echo "home=clean"
 		[ -e "$CLAUDE_CONFIG_DIR/settings.json" ] && echo "config=planted" || echo "config=clean"
+		[ -e "${TMPDIR:-/tmp}/planted" ] && echo "tmp=planted" || echo "tmp=clean"
 		n=0
 		for f in /proc/[0-9]*/cmdline; do
 			[ "$(tr '\0' ' ' < "$f" 2>/dev/null)" = "sleep 300 " ] && n=$((n + 1))
