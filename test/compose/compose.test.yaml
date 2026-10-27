@@ -1,0 +1,46 @@
+# Surcharge de l'exemple Compose réservée au test de bout en bout
+# (compose_test.go), jamais à un déploiement. Elle ne retire aucune garantie :
+# le test lui applique les règles du test statique de l'exemple, sur la
+# configuration fusionnée.
+#
+#   - les étapes de confiance, et elles seules, joignent la fausse forge,
+#     lancée par le test sur l'hôte, sous le nom forge.test ;
+#   - les agents font tourner fake-claude, que porte l'image night-shift-go
+#     construite par le test, à la place de Claude Code ;
+#   - publish attend la CI simulée à la seconde près, pas à la minute.
+
+x-fake-claude-env: &fakeClaudeEnv
+  # /tmp est un tmpfs de l'agent : fake-claude y consigne ses appels.
+  FAKE_CLAUDE_LOG: /tmp
+
+services:
+  select:
+    extra_hosts: ["forge.test:host-gateway"]
+
+  agent:
+    command: ["night-shift", "agent", "--relay", "--state", "/state", "--work", "/work",
+              "--timeout", "30m", "--auth", "subscription", "--claude", "/usr/local/bin/fake-claude"]
+    environment:
+      <<: *fakeClaudeEnv
+
+  publish:
+    command: ["night-shift", "publish", "--relay", "--control", "http://control:8080", "--round-timeout", "35m",
+              "--forge", "${NIGHT_SHIFT_FORGE:-github}", "--instance", "${NIGHT_SHIFT_INSTANCE:-}",
+              "--state", "/state", "--work", "/work", "--ci-timeout", "2m", "--ci-poll", "1s", "--ci-settle", "2s",
+              "--next-state", "/state2", "--next-work", "/work2", "--transcripts", "/transcripts"]
+    extra_hosts: ["forge.test:host-gateway"]
+
+  retry-agent:
+    command: ["night-shift", "agent", "--relay", "--state", "/state2", "--work", "/work2",
+              "--timeout", "30m", "--auth", "subscription", "--claude", "/usr/local/bin/fake-claude"]
+    environment:
+      <<: *fakeClaudeEnv
+      # La relance corrige ce que la CI simulée refuse, quel que soit le brief.
+      FAKE_CLAUDE: fix
+
+  retry-publish:
+    command: ["night-shift", "publish", "--relay", "--follow-up", "--control", "http://control:8080", "--round-timeout", "35m",
+              "--forge", "${NIGHT_SHIFT_FORGE:-github}", "--instance", "${NIGHT_SHIFT_INSTANCE:-}",
+              "--state", "/state2", "--work", "/work2", "--ci-timeout", "2m", "--ci-poll", "1s", "--ci-settle", "2s",
+              "--transcripts", "/transcripts"]
+    extra_hosts: ["forge.test:host-gateway"]

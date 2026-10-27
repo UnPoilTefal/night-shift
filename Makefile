@@ -63,7 +63,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test -race $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test -race $$(go list ./... | grep -v -e /e2e -e /test/compose) -coverprofile cover.out
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
@@ -97,6 +97,13 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 	$(MAKE) cleanup-test-e2e; \
 	git checkout -- config/manager/kustomization.yaml; \
 	exit $$status
+
+# Test de bout en bout de l'exemple Compose : la stack réelle, avec les
+# images $(IMAGE_VERSION) construites par make images, contre une fausse
+# forge lancée sur l'hôte. Docker Engine 28 ou plus.
+.PHONY: test-compose
+test-compose: images ## Run the Compose example end-to-end (nine scenarios). Expects Docker Engine 28+.
+	NIGHT_SHIFT_E2E_VERSION=$(IMAGE_VERSION) go test -tags=compose ./test/compose/ -v -count=1 -timeout 20m
 
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests

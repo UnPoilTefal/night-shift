@@ -114,7 +114,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Control service v1: scheduled and manual passes one at a time, watchdog, host-only history behind a read-only API ([#109](https://github.com/UnPoilTefal/night-shift/issues/109), [docs](docs/control.md))
 - [x] Outcomes and weekly digest: `night-shift weekly` reads each ticket's outcome on the forge, reports the delegation rate and flags the trust-level criterion, on GitHub and GitLab ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 - [x] Docker Compose example (solo tier, no cluster): the same steps of the same binary on a single Docker host, with an embedded egress proxy and a static test of every guarantee ([#110](https://github.com/UnPoilTefal/night-shift/issues/110), [guide](docs/compose.md), [ADR 0013](docs/adr/0013-exemple-compose-second-systeme-d-execution.md))
-- [ ] End-to-end test of the Compose example in CI ([#111](https://github.com/UnPoilTefal/night-shift/issues/111))
+- [x] End-to-end test of the Compose example in CI: the real stack against a fake GitLab, in nine scenarios, from a full pass to a hostile agent ([#111](https://github.com/UnPoilTefal/night-shift/issues/111))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
 
@@ -263,7 +263,7 @@ NIGHT_SHIFT_REPO=owner/repo docker compose up -d
 docker compose exec control night-shift control trigger   # a pass now, besides the schedule
 ```
 
-The agents only reach the proxy. The proxy only lets `CONNECT` to port 443 of the listed domains through, and refuses private ranges first. The agents have no persistent volume, and each round they empty their `tmpfs` and kill every process they left. Secrets are files, and the administration API listens on `127.0.0.1` only. A static test keeps every rule, with one failing case per rule, and checks that each option exists in the binary. It needs Docker Engine 28 or later on Linux; Docker Desktop is for trying it. Relay mode came after `0.2.0`, so build the images from `main` (`make images`) until the next release. Setup, allow-lists, private LLM gateway and the remaining gaps from the `CronJob` are in [`docs/compose.md`](docs/compose.md). The end-to-end test in CI is still to come ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)).
+The agents only reach the proxy. The proxy only lets `CONNECT` to port 443 of the listed domains through, and refuses private ranges first. The agents have no persistent volume, and each round they empty their `tmpfs` and kill every process they left. Secrets are files, and the administration API listens on `127.0.0.1` only. A static test keeps every rule, with one failing case per rule, and checks that each option exists in the binary. It needs Docker Engine 28 or later on Linux; Docker Desktop is for trying it. Relay mode came after `0.2.0`, so build the images from `main` (`make images`) until the next release. Setup, allow-lists, private LLM gateway and the remaining gaps from the `CronJob` are in [`docs/compose.md`](docs/compose.md). In CI, `make test-compose` runs the real stack against a fake GitLab and checks each guarantee end to end: network, secrets, nothing left between rounds, a forged end of round ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)).
 
 ### Container images
 
@@ -337,7 +337,7 @@ make kind-down
 
 `make test-e2e` runs the same scenario end to end in CI.
 
-Every pull request runs lint, tests, the image build with its smoke test and secret scan, and the kind end-to-end scenario. Lint, tests and images are required checks on `main`.
+Every pull request runs lint, tests, the image build with its smoke test and secret scan, the kind end-to-end scenario and the Compose end-to-end test. Lint, tests and images are required checks on `main`.
 
 ## Documentation
 

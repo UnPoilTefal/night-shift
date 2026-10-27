@@ -10,9 +10,12 @@ package gitlabtest
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/http/cgi"
 	"net/http/httptest"
 	"net/url"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
@@ -118,7 +121,7 @@ type pipeline struct {
 
 // Server est l'API simulée. URL est la base de l'API, jusqu'à /api/v4, et
 // Base celle de l'instance. Une requête hors de l'API est une requête git :
-// elle est notée, puis refusée.
+// elle est notée, puis refusée, sauf si ServeGit en a désigné les dépôts.
 type Server struct {
 	URL, Base string
 
@@ -135,16 +138,59 @@ type Server struct {
 	gitCalls  []string
 	// fallback est la pipeline de tout commit qui n'en a pas d'autre.
 	fallback *pipeline
+	// rule décide de la pipeline d'un commit qui n'en a pas encore.
+	rule func(repo, sha string) (status string, jobs []Job, ok bool)
+	// git sert les dépôts nus par git http-backend ; nil, les requêtes git
+	// sont refusées.
+	git http.Handler
 }
 
 // New démarre une API qui n'accepte que token.
 func New(t *testing.T, token string) *Server {
+	return NewOn(t, token, "127.0.0.1:0")
+}
+
+// NewOn démarre l'API sur l'adresse addr, par exemple 0.0.0.0:0 pour
+// qu'elle soit joignable depuis des conteneurs. Base et URL portent
+// l'adresse d'écoute : c'est à l'appelant de la traduire pour eux.
+func NewOn(t *testing.T, token, addr string) *Server {
 	s := &Server{t: t, token: token, projects: map[string]*project{}, jobs: map[int]Job{}, pipelines: map[int]*pipeline{}}
-	srv := httptest.NewServer(http.HandlerFunc(s.serve))
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("écoute de l'API simulée sur %s : %v", addr, err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(s.serve))
+	_ = srv.Listener.Close()
+	srv.Listener = l
+	srv.Start()
 	t.Cleanup(srv.Close)
 	s.Base = srv.URL
 	s.URL = srv.URL + "/api/v4"
 	return s
+}
+
+// ServeGit sert en HTTP, par git http-backend, les dépôts nus de root
+// (<root>/<repo>.git), clone et push, à qui présente le jeton avec
+// l'utilisateur oauth2, comme GitLab.
+func (s *Server) ServeGit(root string) {
+	bin, err := exec.LookPath("git")
+	if err != nil {
+		s.t.Fatalf("git introuvable : %v", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// REMOTE_USER ouvre le push, que http-backend refuse à un anonyme.
+	s.git = &cgi.Handler{Path: bin, Args: []string{"http-backend"},
+		Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1", "REMOTE_USER=oauth2"}}
+}
+
+// SetPipelineRule fait décider rule de la pipeline de tout commit qui n'en a
+// pas encore ; ok à false laisse la pipeline de repli. La décision est
+// gardée : rule n'est consultée qu'une fois par commit.
+func (s *Server) SetPipelineRule(rule func(repo, sha string) (status string, jobs []Job, ok bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rule = rule
 }
 
 func (s *Server) project(repo string) *project {
@@ -355,11 +401,20 @@ func (s *Server) webURL(repo, kind string, iid int) string {
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, "/api/v4/") {
-		user, _, _ := r.BasicAuth()
+		user, password, _ := r.BasicAuth()
 		s.mu.Lock()
 		s.gitCalls = append(s.gitCalls, user+" "+r.URL.Path)
+		git := s.git
 		s.mu.Unlock()
-		http.NotFound(w, r)
+		switch {
+		case git == nil:
+			http.NotFound(w, r)
+		case user != "oauth2" || password != s.token:
+			w.Header().Set("WWW-Authenticate", `Basic realm="GitLab"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			git.ServeHTTP(w, r)
+		}
 		return
 	}
 	if r.Header.Get("Authorization") != "Bearer "+s.token {
@@ -567,7 +622,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.notes(w, r, &m.Notes, str("body"))
 	case route[0] == "pipelines" && len(route) == 1 && r.Method == http.MethodGet:
 		out := []map[string]any{}
-		pl := p.pipeline[r.URL.Query().Get("sha")]
+		sha := r.URL.Query().Get("sha")
+		pl := p.pipeline[sha]
+		if pl == nil && s.rule != nil && sha != "" {
+			if status, jobs, ok := s.rule(repo, sha); ok {
+				pl = s.newPipeline(status, jobs)
+				p.pipeline[sha] = pl
+			}
+		}
 		if pl == nil {
 			pl = s.fallback
 		}
