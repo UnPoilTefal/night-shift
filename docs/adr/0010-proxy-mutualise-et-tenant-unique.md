@@ -13,3 +13,5 @@ Un homelab est une plateforme à un seul tenant : il fait tourner **le même op�
 
 - La chart de la plateforme embarque le proxy ; le passage par une passerelle de modèle (Bedrock, LLM interne) se fera par le profil d'exécution et la liste d'autorisation, sans changement d'architecture.
 - Tant que la parité n'est pas atteinte, les évolutions métier restent dans le binaire `night-shift`, partagé par les deux chemins (ADR 0004).
+
+Statut : amendé par l'ADR 0013 (exemple Compose).

@@ -111,6 +111,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Agent configuration fresh on every round, transcripts archived by the trusted steps only ([#104](https://github.com/UnPoilTefal/night-shift/issues/104))
 - [x] Fixed refusals for irreversible actions (push, merge, editing a ticket or PR body), passed to the agent whatever the allowed tools; defence in depth on top of the agent having no write token ([#115](https://github.com/UnPoilTefal/night-shift/issues/115))
 - [ ] Outcomes and weekly digest ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
+- [ ] Docker Compose example (solo tier, no cluster): the same steps of the same binary on a single Docker host ([spec](https://github.com/UnPoilTefal/night-shift/issues/105), [ADR 0013](docs/adr/0013-exemple-compose-second-systeme-d-execution.md))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
 
