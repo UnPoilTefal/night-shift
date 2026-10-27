@@ -44,10 +44,10 @@ func digestCode(ctx context.Context, f forge.TicketSource, r pass.Report, stdout
 }
 
 // publishDigest complète le rapport de la sélection avec le ticket rendu par
-// la Publication, s'il y en a un, et publie le digest. Un rapport absent ou
+// la Publication, s'il y en a un, et ses incidents, puis publie le digest. Un rapport absent ou
 // illisible n'empêche pas le rendu du ticket, déjà fait : il prive seulement
 // la passe de digest. Code de sortie : 1 si la passe a connu un incident.
-func publishDigest(ctx context.Context, f forge.TicketSource, d *stage.Dirs, tr *pass.TicketReport, stdout, stderr io.Writer) int {
+func publishDigest(ctx context.Context, f forge.TicketSource, d *stage.Dirs, tr *pass.TicketReport, incidents []string, stdout, stderr io.Writer) int {
 	report, ok, err := d.ReadReport()
 	switch {
 	case err != nil:
@@ -60,6 +60,7 @@ func publishDigest(ctx context.Context, f forge.TicketSource, d *stage.Dirs, tr 
 	if tr != nil {
 		report.Tickets = append(report.Tickets, *tr)
 	}
+	report.Errors = append(report.Errors, incidents...)
 	report.Finished = time.Now()
 	code := digestCode(ctx, f, report, stdout, stderr, "publish")
 	if len(report.Errors) > 0 {

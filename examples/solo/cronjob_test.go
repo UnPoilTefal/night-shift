@@ -15,6 +15,7 @@ import (
 
 type envVar struct {
 	Name      string `yaml:"name"`
+	Value     string `yaml:"value"`
 	ValueFrom *struct {
 		SecretKeyRef *struct {
 			Name string `yaml:"name"`
@@ -58,7 +59,11 @@ type cronJob struct {
 							Secret *struct {
 								SecretName string `yaml:"secretName"`
 							} `yaml:"secret"`
-							Projected any `yaml:"projected"`
+							Projected             any `yaml:"projected"`
+							EmptyDir              any `yaml:"emptyDir"`
+							PersistentVolumeClaim *struct {
+								ClaimName string `yaml:"claimName"`
+							} `yaml:"persistentVolumeClaim"`
 						} `yaml:"volumes"`
 					} `yaml:"spec"`
 				} `yaml:"template"`
@@ -198,6 +203,57 @@ func TestEachTaskIsWrittenByATrustedStageAndReadOnlyForTheAgent(t *testing.T) {
 	})
 }
 
+func TestAgentConfigIsFreshEachRoundAndTranscriptsAreArchivedByTrustedStages(t *testing.T) {
+	eachExample(t, func(t *testing.T, cj cronJob) {
+		spec := cj.Spec.JobTemplate.Spec.Template.Spec
+		emptyDir, persistent := map[string]bool{}, map[string]bool{}
+		for _, v := range spec.Volumes {
+			emptyDir[v.Name] = v.EmptyDir != nil
+			// Tout volume qui n'est pas un emptyDir survit au pod, ou vient
+			// d'ailleurs.
+			persistent[v.Name] = v.EmptyDir == nil
+		}
+		configs := map[string]bool{}
+		for _, c := range append(slices.Clone(spec.InitContainers), spec.Containers...) {
+			mounts := map[string]string{}
+			for _, m := range c.VolumeMounts {
+				mounts[m.MountPath] = m.Name
+			}
+			if strings.HasSuffix(c.Name, "publish") {
+				if p := flagValue(c.Args, "--transcripts"); p == "" || !persistent[mounts[p]] {
+					t.Errorf("%s : --transcripts %q, attendu l'archive sur un volume persistant monté", c.Name, p)
+				}
+			}
+			if !strings.HasSuffix(c.Name, "agent") {
+				continue
+			}
+			for _, m := range c.VolumeMounts {
+				if persistent[m.Name] {
+					t.Errorf("%s monte le volume persistant %s : un tour pourrait y préparer le suivant", c.Name, m.Name)
+				}
+			}
+			dir := ""
+			for _, e := range c.Env {
+				if e.Name == "CLAUDE_CONFIG_DIR" {
+					dir = e.Value
+				}
+			}
+			vol, ok := mounts[dir]
+			if dir == "" || !ok || !emptyDir[vol] {
+				t.Errorf("%s : CLAUDE_CONFIG_DIR = %q, attendu le point de montage d'un emptyDir", c.Name, dir)
+				continue
+			}
+			if configs[vol] {
+				t.Errorf("%s : la configuration %s sert déjà à un autre tour", c.Name, vol)
+			}
+			configs[vol] = true
+		}
+		if len(configs) != 2 {
+			t.Errorf("configurations de l'agent = %v, attendu une par tour", configs)
+		}
+	})
+}
+
 func TestStageVolumeFlagsPointAtTheirMounts(t *testing.T) {
 	eachExample(t, func(t *testing.T, cj cronJob) {
 		spec := cj.Spec.JobTemplate.Spec.Template.Spec
@@ -206,7 +262,7 @@ func TestStageVolumeFlagsPointAtTheirMounts(t *testing.T) {
 			for _, m := range c.VolumeMounts {
 				paths[m.MountPath] = true
 			}
-			for _, f := range []string{"--state", "--work", "--next-state", "--next-work"} {
+			for _, f := range []string{"--state", "--work", "--next-state", "--next-work", "--transcripts"} {
 				if p := flagValue(c.Args, f); p != "" && !paths[p] {
 					t.Errorf("%s : %s %s ne correspond à aucun montage", c.Name, f, p)
 				}

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,7 +57,8 @@ type Claude struct {
 	// l'agent commence.
 	Dir     string
 	BaseSHA string
-	// OutDir, hors du clone, reçoit le motif d'un arrêt needs-info.
+	// OutDir, hors du clone, reçoit le motif d'un arrêt needs-info et la
+	// copie du transcript de la session.
 	OutDir string
 	Auth   Auth
 	// AllowedTools est la liste explicite des outils permis ;
@@ -136,7 +138,7 @@ func (c Claude) Run(ctx context.Context, task harness.Task) (harness.Result, err
 	if res.Duration == 0 {
 		res.Duration = time.Since(start)
 	}
-	res.Transcript = c.transcript(env, out.SessionID)
+	res.Transcript = c.copyTranscript(c.transcript(env, out.SessionID))
 
 	if errors.Is(rctx.Err(), context.DeadlineExceeded) {
 		res.Outcome, res.Reason = harness.Failed, fmt.Sprintf("durée maximale atteinte (%s), agent interrompu", c.Timeout)
@@ -271,9 +273,11 @@ func (c Claude) patches(ctx context.Context) ([][]byte, error) {
 }
 
 // transcript retrouve le fichier de la session dans le dossier de
-// configuration de Claude Code ; il rend "" s'il est introuvable.
+// configuration de Claude Code ; il rend "" s'il est introuvable. Ce dossier
+// est neuf à chaque tour : sans identifiant de session (agent interrompu), un
+// transcript seul est celui du tour.
 func (c Claude) transcript(env []string, session string) string {
-	if session == "" || strings.ContainsAny(session, `/\*?[`) {
+	if strings.ContainsAny(session, `/\*?[`) {
 		return ""
 	}
 	dir := ""
@@ -287,11 +291,48 @@ func (c Claude) transcript(env []string, session string) string {
 	if dir == "" {
 		return ""
 	}
-	matches, _ := filepath.Glob(filepath.Join(dir, "projects", "*", session+".jsonl"))
-	if len(matches) == 0 {
+	name := cmp.Or(session, "*")
+	matches, _ := filepath.Glob(filepath.Join(dir, "projects", "*", name+".jsonl"))
+	if len(matches) != 1 {
 		return ""
 	}
 	return matches[0]
+}
+
+// copyTranscript copie le transcript dans la sortie de l'étape, pour que les
+// étapes de confiance l'archivent : l'agent ne monte aucun volume
+// persistant. Il rend TranscriptFile, ou "" si le transcript est absent ou
+// dépasse MaxTranscriptBytes.
+func (c Claude) copyTranscript(src string) string {
+	if src == "" {
+		return ""
+	}
+	in, err := os.Open(src) // #nosec G304 -- fichier de session trouvé par le harness
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = in.Close() }()
+	if fi, err := in.Stat(); err != nil || !fi.Mode().IsRegular() || fi.Size() > harness.MaxTranscriptBytes {
+		return ""
+	}
+	// Ce que l'agent aurait laissé sous ce nom, lien compris, est remplacé.
+	dst := filepath.Join(c.OutDir, harness.TranscriptFile)
+	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) // #nosec G302 G304 -- lu par la Publication
+	if err != nil {
+		return ""
+	}
+	n, err := io.Copy(out, io.LimitReader(in, harness.MaxTranscriptBytes+1))
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil || n > harness.MaxTranscriptBytes {
+		_ = os.Remove(dst)
+		return ""
+	}
+	return harness.TranscriptFile
 }
 
 func lastLine(b []byte) []byte {

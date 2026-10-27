@@ -70,12 +70,23 @@ type Result struct {
 	// commit, dans l'ordre ; elle n'est renseignée qu'en cas de succès.
 	Patches [][]byte
 	// Agent identifie l'agent dans le trailer des commits publiés.
-	Agent      string
-	CostUSD    float64
-	Duration   time.Duration
-	SessionID  string
+	Agent     string
+	CostUSD   float64
+	Duration  time.Duration
+	SessionID string
+	// Transcript est le transcript de la session : TranscriptFile dans la
+	// sortie de l'étape agent, ou "" s'il n'y en a pas. Les étapes de
+	// confiance l'archivent ailleurs et y remplacent ce nom par le chemin de
+	// l'archive.
 	Transcript string
 }
+
+// TranscriptFile est le nom du transcript dans la sortie de l'étape agent.
+// Le nom est fixe : il ne vient jamais du contenu de l'agent.
+const TranscriptFile = "transcript.jsonl"
+
+// MaxTranscriptBytes plafonne la taille d'un transcript copié puis archivé.
+const MaxTranscriptBytes = 50 << 20
 
 // Harness fait travailler un agent sur un ticket.
 type Harness interface {
