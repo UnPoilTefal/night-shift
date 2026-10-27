@@ -56,16 +56,17 @@ func digestCode(ctx context.Context, f forge.TicketSource, hook string, r pass.R
 // publishDigest complète le rapport de la sélection avec le ticket rendu par
 // la Publication, s'il y en a un, et ses incidents, puis publie le digest. Un rapport absent ou
 // illisible n'empêche pas le rendu du ticket, déjà fait : il prive seulement
-// la passe de digest. Code de sortie : 1 si la passe a connu un incident.
-func publishDigest(ctx context.Context, f forge.TicketSource, hook string, d *stage.Dirs, tr *pass.TicketReport, incidents []string, stdout, stderr io.Writer) int {
+// la passe de digest. Il rend le code de sortie, 1 si la passe a connu un
+// incident, et le rapport complet de la passe, s'il a pu le lire.
+func publishDigest(ctx context.Context, f forge.TicketSource, hook string, d *stage.Dirs, tr *pass.TicketReport, incidents []string, stdout, stderr io.Writer) (int, *pass.Report) {
 	report, ok, err := d.ReadReport()
 	switch {
 	case err != nil:
 		_, _ = fmt.Fprintf(stderr, "publish : %v ; pas de digest\n", err)
-		return 1
+		return 1, nil
 	case !ok:
 		_, _ = fmt.Fprintln(stderr, "publish : aucun rapport de la sélection, pas de digest")
-		return 0
+		return 0, nil
 	}
 	if tr != nil {
 		report.Tickets = append(report.Tickets, *tr)
@@ -75,7 +76,7 @@ func publishDigest(ctx context.Context, f forge.TicketSource, hook string, d *st
 	code := digestCode(ctx, f, hook, report, stdout, stderr, "publish")
 	if len(report.Errors) > 0 {
 		_, _ = fmt.Fprintf(stderr, "publish : la passe a connu %d incident(s), voir le digest\n", len(report.Errors))
-		return 1
+		return 1, &report
 	}
-	return code
+	return code, &report
 }
