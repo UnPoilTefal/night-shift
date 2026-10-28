@@ -53,7 +53,7 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 	// Le dépôt de la configuration de l'agent est une zone interdite à
 	// toutes ses passes : il n'évolue que par une PR fusionnée par un porteur.
 	if task.AgentConfigRepo != "" && repo == task.AgentConfigRepo {
-		return pass.Published{}, &pass.ZoneRefusalError{Reason: repo + " est le dépôt de la configuration de l'agent, interdit à toutes ses passes"}
+		return pass.Published{}, &pass.ZoneRefusalError{Reason: repo + " est le dépôt de la configuration de l'agent, interdit à toutes ses passes", Zone: "dépôt de la configuration de l'agent"}
 	}
 	remote := gitrepo.Remote{GitAccess: g.Code.GitAccess(repo), Token: g.Token}
 	tmp, err := os.MkdirTemp("", "night-shift-publish-")
@@ -114,8 +114,12 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 	if _, err := remote.Git(ctx, dir, "push", "--quiet", "--no-follow-tags", "origin", ref+":"+ref); err != nil {
 		return pass.Published{}, err
 	}
+	var sensitive []pass.SensitivePath
+	for _, f := range flagged {
+		sensitive = append(sensitive, pass.SensitivePath{Path: f.Path, Zone: f.Zone})
+	}
 	if task.ChangeRequest != nil {
-		pub := pass.Published{Draft: *task.ChangeRequest, Head: pushed}
+		pub := pass.Published{Draft: *task.ChangeRequest, Head: pushed, Sensitive: sensitive}
 		if len(flagged) == 0 {
 			return pub, nil
 		}
@@ -148,7 +152,7 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 	if err != nil && url == "" {
 		return pass.Published{}, err
 	}
-	return pass.Published{Draft: forge.Draft{Number: number, URL: url, Branch: branch}, Head: pushed}, err
+	return pass.Published{Draft: forge.Draft{Number: number, URL: url, Branch: branch}, Head: pushed, Sensitive: sensitive}, err
 }
 
 // check juge chaque commit de base..HEAD, dans le clone dir, contre
@@ -204,7 +208,10 @@ func check(ctx context.Context, remote gitrepo.Remote, dir, optInSHA, base strin
 			case zones.Block:
 				// Le SHA réécrit par la Publication n'existe nulle part sur la
 				// forge : le rang dans la série parle mieux à un humain.
-				return refuse("le commit %d de la série touche %s, dans la zone interdite %s", i+1, code(f.Path), code(f.Zone))
+				return nil, &pass.ZoneRefusalError{
+					Reason: fmt.Sprintf("le commit %d de la série touche %s, dans la zone interdite %s", i+1, code(f.Path), code(f.Zone)),
+					Zone:   f.Zone, Path: f.Path,
+				}
 			case zones.Flag:
 				if !slices.ContainsFunc(flagged, func(g zones.Finding) bool { return g.Path == f.Path }) {
 					flagged = append(flagged, f)

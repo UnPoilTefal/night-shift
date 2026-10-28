@@ -18,6 +18,7 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
 	"github.com/UnPoilTefal/night-shift/internal/optin"
+	"github.com/UnPoilTefal/night-shift/internal/verdict"
 )
 
 // Config paramètre une passe.
@@ -87,6 +88,9 @@ const ZoneRefusal harness.Outcome = "zone-refusal"
 // et zone, ou adhésion introuvable.
 type ZoneRefusalError struct {
 	Reason string
+	// Zone et Path nomment la zone interdite et le chemin touché, quand le
+	// refus en vient.
+	Zone, Path string
 }
 
 func (e *ZoneRefusalError) Error() string { return "refus de zone : " + e.Reason }
@@ -124,6 +128,9 @@ type TicketReport struct {
 	Transcript    string
 	// AgentConfig est la configuration de l'agent du ticket, dépôt@révision.
 	AgentConfig string `json:",omitempty"`
+	// Verdicts compte les verdicts du ticket par résultat, relus dans le
+	// journal ; rien de brut.
+	Verdicts map[verdict.Result]int `json:",omitempty"`
 }
 
 // RetriageReport est le constat d'un ticket sorti de la file sans être
@@ -156,6 +163,13 @@ type Report struct {
 type Published struct {
 	Draft forge.Draft
 	Head  string
+	// Sensitive sont les chemins de zones sensibles que la série touche.
+	Sensitive []SensitivePath
+}
+
+// SensitivePath est un chemin d'une zone sensible touché par une série.
+type SensitivePath struct {
+	Path, Zone string
 }
 
 // Publisher est l'étape de Publication : elle applique la série de commits
@@ -384,6 +398,10 @@ type Followup struct {
 	// rendu de repli, CI rouge, si la relance ne peut pas avoir lieu.
 	Task   harness.Task
 	Result harness.Result
+	// Verdicts sont ceux que la Publication a rendus sur ce tour : refus de
+	// zone, zones sensibles, CI absente. L'appelant les complète de leur
+	// identification et les journalise.
+	Verdicts []verdict.Verdict
 }
 
 // Follow publie la série d'un tour réussi, puis suit la CI de la demande de
@@ -392,7 +410,8 @@ type Followup struct {
 // tête de la demande publiée, checks en échec. Un tour qui n'a rien à publier
 // est rendu tel quel.
 func Follow(ctx context.Context, cfg Config, code forge.CodeForge, p Publisher, task harness.Task, res harness.Result) Followup {
-	done := func(res harness.Result) Followup { return Followup{Task: task, Result: res} }
+	var vs []verdict.Verdict
+	done := func(res harness.Result) Followup { return Followup{Task: task, Result: res, Verdicts: vs} }
 	if res.Outcome != harness.Succeeded {
 		return done(res)
 	}
@@ -412,19 +431,35 @@ func Follow(ctx context.Context, cfg Config, code forge.CodeForge, p Publisher, 
 	switch {
 	case errors.As(err, &refusal):
 		res.Outcome, res.Reason = ZoneRefusal, refusal.Reason
+		vs = append(vs, verdict.Verdict{
+			Brick: "B28", Realization: "refus de zone par la Publication (ADR 0011)", Rule: refusal.Zone,
+			Result: verdict.Refused, Effect: true, ActionClass: "écriture en zone interdite",
+			Fingerprint: verdict.Fingerprint(cmp.Or(refusal.Path, refusal.Reason)), WrittenBy: "publish",
+		})
 		return done(res)
 	case err != nil:
 		res.Outcome, res.Reason = harness.Failed, "Publication échouée : "+err.Error()
 		return done(res)
 	}
 
-	checks, verdict, err := waitCI(ctx, cfg.CI, code, task.TargetRepo, pub.Head)
+	for _, s := range pub.Sensitive {
+		vs = append(vs, verdict.Verdict{
+			Brick: "B28", Realization: "zone sensible de l'adhésion", Rule: s.Zone,
+			Result: verdict.Flagged, Effect: true, ActionClass: "écriture en zone sensible",
+			Fingerprint: verdict.Fingerprint(s.Path), WrittenBy: "publish",
+		})
+	}
+	checks, ci, err := waitCI(ctx, cfg.CI, code, task.TargetRepo, pub.Head)
 	failed := filter(checks, forge.CheckFailed)
 	switch {
-	case verdict == ciSettled && len(failed) == 0:
+	case ci == ciSettled && len(failed) == 0:
 		res.Reason = fmt.Sprintf("CI verte au tour %d.\n\n%s", round(task), res.Reason)
 		return done(res)
-	case verdict == ciAbsent:
+	case ci == ciAbsent:
+		vs = append(vs, verdict.Verdict{
+			Brick: "B18", Realization: "attente de la CI de la demande de changement (#135)", Rule: "--ci-grace",
+			Result: verdict.Flagged, Effect: true, ActionClass: "demande de changement sans CI", WrittenBy: "publish",
+		})
 		res.Reason = fmt.Sprintf("Aucune CI déclenchée : ni check ni statut sur la PR au bout de %s, rien n'a vérifié le changement ; à vérifier sur la PR.\n\n%s",
 			min(cfg.CI.grace(), cfg.CI.timeout()), res.Reason)
 		return done(res)

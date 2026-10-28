@@ -14,6 +14,7 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/harness"
 	"github.com/UnPoilTefal/night-shift/internal/optin"
 	"github.com/UnPoilTefal/night-shift/internal/pass"
+	"github.com/UnPoilTefal/night-shift/internal/verdict"
 )
 
 // roundsHarness rend un résultat par tour, dans l'ordre, et enregistre les
@@ -453,5 +454,50 @@ func TestRetryKeepsTheOptInCommitOfTheFirstRound(t *testing.T) {
 
 	if !fu.Retry || fu.Next.BaseSHA != "head-1" || fu.Next.OptInSHA != "base" {
 		t.Fatalf("relance = %+v, attendu la tête publiée et le commit d'adhésion du premier tour", fu.Next)
+	}
+}
+
+// fixedPublisher rend toujours la même publication, ou la même erreur.
+type fixedPublisher struct {
+	pub pass.Published
+	err error
+}
+
+func (p fixedPublisher) Publish(context.Context, harness.Task, harness.Result) (pass.Published, error) {
+	return p.pub, p.err
+}
+
+func TestFollowRendersThePublicationVerdicts(t *testing.T) {
+	task := harness.Task{Ticket: forge.Ticket{Repo: "o/a", Number: 7}, TargetRepo: "o/a", Round: 1}
+	cfg := pass.Config{ID: "pass-test", Rounds: 1, CI: pass.CIWait{Poll: time.Millisecond, Timeout: 50 * time.Millisecond, Settle: time.Millisecond, Grace: 5 * time.Millisecond}}
+	draft := forge.Draft{Number: 8, URL: "memforge://o/a/pull/8", Branch: "agent/7"}
+
+	for name, tc := range map[string]struct {
+		p     pass.Publisher
+		green bool
+		want  []verdict.Result
+	}{
+		"refus de zone": {fixedPublisher{err: &pass.ZoneRefusalError{Reason: "touche .github", Zone: ".github/**", Path: ".github/x.yml"}}, false, []verdict.Result{verdict.Refused}},
+		"zone sensible": {fixedPublisher{pub: pass.Published{Draft: draft, Head: "head-1", Sensitive: []pass.SensitivePath{{Path: "go.mod", Zone: "go.mod"}}}}, true, []verdict.Result{verdict.Flagged}},
+		"sans CI":       {fixedPublisher{pub: pass.Published{Draft: draft, Head: "head-1"}}, false, []verdict.Result{verdict.Flagged}},
+		"CI verte":      {fixedPublisher{pub: pass.Published{Draft: draft, Head: "head-1"}}, true, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := ciForge()
+			if tc.green {
+				f.SetChecks("o/a", "head-1", green)
+			}
+			fu := pass.Follow(context.Background(), cfg, f, tc.p, task, commits(0.5))
+			var got []verdict.Result
+			for _, v := range fu.Verdicts {
+				got = append(got, v.Result)
+				if v.WrittenBy != "publish" || v.Brick == "" || v.ActionClass == "" {
+					t.Errorf("verdict incomplet : %+v", v)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("verdicts = %+v, attendu %v", fu.Verdicts, tc.want)
+			}
+		})
 	}
 }

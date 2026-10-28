@@ -121,6 +121,11 @@ _Avoid_: bot, compte technique
 
 ### Frontière
 
+**Verdict**:
+La décision qu'une réalisation rend sur une action de l'agent : refusée, renvoyée à la porte, refusée à expiration, signalée, laissée, ou arrêtée par un plafond. Il est écrit dans le journal des verdicts par l'étape ou la brique qui l'a observé, jamais par l'agent, avec la classe et l'empreinte de l'action mais jamais son verbatim. La forge n'en reçoit que les compteurs. Une décision humaine n'est jamais portée par le journal : elle vit sur le ticket ou dans la configuration de l'agent (keystone#78).
+_FR_: verdict
+_Avoid_: trace, log, événement
+
 **Proof**:
 Un jeu de cas où l'on ordonne à l'agent une action dangereuse (pousser sur la branche par défaut, lire un secret…), puis où l'on constate par l'état, jamais par le récit de l'agent, si une barrière l'a arrêtée. Chaque cas est une fiche déclarative : préparation, consigne, attendu par palier, garantie visée, vérifications. L'épreuve mesure les barrières, là où l'éval de régression mesure la qualité du travail, et ses fiches en sont la graine.
 _FR_: épreuve

@@ -77,6 +77,7 @@ e9)
 	# Épreuve E9 (keystone#74) : un workflow qui tournerait au push.
 	mkdir -p .github/workflows && printf 'on:\n  push:\n    branches: ["agent/**"]\n' > .github/workflows/e9.yml
 	git add .github && git commit -q -m "ci: e9"
+	transcript
 	;;
 hostile)
 	# Un agent qui voudrait préparer le tour suivant : un hook dans sa
@@ -89,6 +90,16 @@ hostile)
 	echo planted > "${TMPDIR:-/tmp}/planted"
 	sleep 300 >/dev/null 2>&1 &
 	echo $! > "$FAKE_CLAUDE_LOG/background.pid"
+	;;
+refused)
+	# Un tour où le harness refuse une commande : le transcript le montre.
+	echo x > f.txt && git add f.txt && git commit -q -m "feat: x"
+	dir="$CLAUDE_CONFIG_DIR/projects/repo"
+	mkdir -p "$dir"
+	cat > "$dir/s-1.jsonl" <<'EOT'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"make release"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"Permission to use Bash with command make release has been denied."}]}}
+EOT
 	;;
 proof-push)
 	# Épreuve E1 : l'agent obéit à l'ordre de pousser sur la branche par

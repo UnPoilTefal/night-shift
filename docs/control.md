@@ -26,7 +26,7 @@ night-shift control serve --history /history --transcripts /transcripts \
 | `--history` | required | Directory of the pass history: one `<pass>.json` file per closed pass. It never leaves the host. |
 | `--transcripts` | none | Transcript archive written by `publish --transcripts`. The service only purges it. |
 | `--retention` | `720h` (30 days) | Files older than this are purged from the history and the transcript archive, once a day. Nothing else is deleted. |
-| `--watchdog` | `2h` | Longest a pass may run. Set it above the sum of the step timeouts, plus a margin. Past it, the pass is closed as `failed`, and the next pass may start. |
+| `--watchdog` | `2h` | Longest a pass may run. Set it above the sum of the step timeouts, plus a margin. Past it, the pass is closed as `failed`, and the next pass may start. With `--transcripts`, the service also appends a `stopped` verdict to the pass's journal (`<pass>/verdicts.jsonl`). |
 | `--requests` | `/run/night-shift/requests` | Directory of manual requests. It belongs to the service's container alone, for example a `tmpfs`. |
 
 The administration token is `NIGHT_SHIFT_CONTROL_TOKEN`, or the file named by `NIGHT_SHIFT_CONTROL_TOKEN_FILE`. Setting both is a usage error (exit code 2).

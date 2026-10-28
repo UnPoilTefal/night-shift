@@ -51,6 +51,10 @@ type relayFlags struct {
 	trusted      bool
 }
 
+// deadlineReason ouvre le motif d'un tour dont l'échéance de relais est
+// passée ; le journal des verdicts le reconnaît.
+const deadlineReason = "échéance du tour"
+
 func addRelayFlags(fs *flag.FlagSet, trusted bool) *relayFlags {
 	rf := &relayFlags{trusted: trusted}
 	fs.BoolVar(&rf.on, "relay", false, "mode relais : l'étape tourne en service permanent et attend son tour")
@@ -313,7 +317,7 @@ func relayPublish(ctx context.Context, rep *reporter, d stage.Dirs,
 				if ctx.Err() != nil {
 					return 0
 				}
-				pre = &harness.Result{Outcome: harness.Failed, Reason: fmt.Sprintf("échéance du tour %d dépassée : l'agent n'a pas annoncé sa fin à temps", turn.Round)}
+				pre = &harness.Result{Outcome: harness.Failed, Reason: fmt.Sprintf("%s %d dépassée : l'agent n'a pas annoncé sa fin à temps", deadlineReason, turn.Round)}
 			} else {
 				work, pre, cleanup = copyOut(d)
 				afterCopy(d)

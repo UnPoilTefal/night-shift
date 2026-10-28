@@ -22,6 +22,7 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/publication"
 	"github.com/UnPoilTefal/night-shift/internal/relay"
 	"github.com/UnPoilTefal/night-shift/internal/stage"
+	"github.com/UnPoilTefal/night-shift/internal/verdict"
 )
 
 func stageFlags(fs *flag.FlagSet) *stage.Dirs {
@@ -427,6 +428,13 @@ func publishOnce(ctx context.Context, o publishOpts, d stage.Dirs, pre *harness.
 	}
 	remote := gitrepo.Remote{GitAccess: f.GitAccess(task.TargetRepo), Token: token}
 	fu := pass.Follow(ctx, cfg, f, publication.Git{Code: f, Token: token}, task, res)
+	// Les verdicts du tour vont au journal avant tout rendu, relance comprise.
+	if o.transcripts != "" {
+		if err := verdict.Append(o.transcripts, roundVerdicts(task, res, fu, archived)...); err != nil {
+			incidents = append(incidents, "journal des verdicts : "+err.Error())
+			_, _ = fmt.Fprintf(stderr, "publish : %s\n", incidents[len(incidents)-1])
+		}
+	}
 	if fu.Retry {
 		perr := prepareRetry(ctx, d, next, remote, fu.Next, incidents)
 		// En relais, le marqueur du tour de relance part en dernier, après
@@ -454,12 +462,72 @@ func publishOnce(ctx context.Context, o publishOpts, d stage.Dirs, pre *harness.
 			return 1, nil, incidents
 		}
 	}
+	if o.transcripts != "" {
+		tr.Verdicts = ticketVerdicts(o.transcripts, fu.Task, &incidents)
+		if summary := verdict.Summary(tr.Verdicts); summary != "" && fu.Task.ChangeRequest != nil {
+			if err := f.CommentChangeRequest(ctx, fu.Task.TargetRepo, fu.Task.ChangeRequest.Number, fmt.Sprintf(
+				"night-shift (passe %s) : verdicts sur les actions de l'agent pour ce ticket : %s. Le détail est au journal des verdicts de la plateforme.",
+				fu.Task.PassID, summary)); err != nil {
+				incidents = append(incidents, "compteurs de verdicts sur la demande de changement : "+err.Error())
+			}
+		}
+	}
 	printTickets(stdout, []pass.TicketReport{tr})
 	code, report := publishDigest(ctx, f, o.hook, &d, &tr, incidents, stdout, stderr)
 	if code != 0 || err != nil {
 		return 1, report, incidents
 	}
 	return 0, report, incidents
+}
+
+// roundVerdicts rend les verdicts d'un tour, complétés de leur
+// identification : refus du harness lus dans le transcript archivé (copie
+// de confiance), plafond de durée, et ceux que la Publication a rendus.
+func roundVerdicts(task harness.Task, res harness.Result, fu pass.Followup, transcript string) []verdict.Verdict {
+	var vs []verdict.Verdict
+	if transcript != "" {
+		if b, err := os.ReadFile(transcript); err == nil { // #nosec G304 -- chemin rendu par l'archive
+			for _, v := range verdict.Refusals(b) {
+				v.WrittenBy = "publish (transcript archivé)"
+				vs = append(vs, v)
+			}
+		}
+	}
+	switch {
+	case res.Outcome == harness.Failed && strings.HasPrefix(res.Reason, claude.TimeoutReason):
+		vs = append(vs, verdict.Verdict{
+			Brick: "B17", Realization: "plafond de durée du tour (agent --timeout)", Result: verdict.Stopped, Effect: true,
+			ActionClass: "tour de l'agent", WrittenBy: "étape agent (harness), relue par publish",
+		})
+	case res.Outcome == harness.Failed && strings.HasPrefix(res.Reason, deadlineReason):
+		vs = append(vs, verdict.Verdict{
+			Brick: "B17", Realization: "échéance du tour en relais (--round-timeout)", Result: verdict.Stopped, Effect: true,
+			ActionClass: "tour de l'agent", WrittenBy: "publish",
+		})
+	}
+	vs = append(vs, fu.Verdicts...)
+	now := time.Now().UTC()
+	for i := range vs {
+		vs[i].At, vs[i].Platform, vs[i].Pass = now, verdict.Platform, task.PassID
+		vs[i].Ticket = fmt.Sprintf("%s#%d", task.Ticket.Repo, task.Ticket.Number)
+		vs[i].Repo, vs[i].AgentConfig = task.TargetRepo, pass.AgentConfig(task)
+	}
+	return vs
+}
+
+// ticketVerdicts compte, dans le journal de la passe, les verdicts du
+// ticket de la tâche, tous tours confondus.
+func ticketVerdicts(archive string, task harness.Task, incidents *[]string) map[verdict.Result]int {
+	vs, err := verdict.Read(archive, task.PassID)
+	if err != nil {
+		*incidents = append(*incidents, "journal des verdicts : "+err.Error())
+	}
+	ticket := fmt.Sprintf("%s#%d", task.Ticket.Repo, task.Ticket.Number)
+	vs = slices.DeleteFunc(vs, func(v verdict.Verdict) bool { return v.Ticket != ticket })
+	if len(vs) == 0 {
+		return nil
+	}
+	return verdict.Counts(vs)
 }
 
 // prepareRetry prépare la relance de l'agent dans les volumes next : un
