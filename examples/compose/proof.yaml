@@ -13,7 +13,7 @@
 #   NIGHT_SHIFT_SCHEDULE      à fixer sur une échéance lointaine, par exemple
 #                             « 0 0 1 1 * » : seules les demandes de
 #                             l'épreuve doivent déclencher une passe.
-# --agent-config exige des images postérieures à la release 0.3.0.
+# --agent-config existe depuis la release 0.4.0.
 
 services:
   select:
