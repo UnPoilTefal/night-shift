@@ -45,6 +45,10 @@ type Dirs struct {
 // RepoDir est le clone du dépôt cible.
 func (d Dirs) RepoDir() string { return filepath.Join(d.Work, "repo") }
 
+// AgentConfigDir est la configuration de l'agent, recopiée par la
+// sélection depuis son dépôt et en lecture seule pour l'agent.
+func (d Dirs) AgentConfigDir() string { return filepath.Join(d.State, "agent-config") }
+
 // OutDir est la sortie de l'agent, hors du clone.
 func (d Dirs) OutDir() string { return filepath.Join(d.Work, "out") }
 

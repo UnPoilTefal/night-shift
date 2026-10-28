@@ -305,3 +305,73 @@ func TestRetryRoundHandsTheFailingChecksToTheAgentWithoutForgeToken(t *testing.T
 		t.Fatal("l'agent relancé reçoit un jeton de forge")
 	}
 }
+
+// configTask est la tâche de launch, avec une configuration de l'agent.
+func configTask() harness.Task {
+	return harness.Task{
+		Ticket: forge.Ticket{Repo: "o/a", Number: 7, Title: "T"}, Brief: "# T\n", PassID: "pass-1",
+		AgentConfigRepo: "o/agent-config", AgentConfigRevision: "abc123",
+	}
+}
+
+func agentConfig(t *testing.T, yaml string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "agent.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skills", "review", "SKILL.md"), []byte("---\nname: review\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestAgentConfigAddsRefusalsOnTopOfTheFixedOnesAndInstallsItsSkills(t *testing.T) {
+	cfg := agentConfig(t, "version: 1\ndeniedTools: [\"Bash(npm publish*)\"]\n")
+	var configHome string
+	r := launchTask(t, "noop", func(c *claude.Claude) {
+		c.ConfigDir = cfg
+		for _, kv := range c.Env {
+			if v, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok {
+				configHome = v
+			}
+		}
+	}, configTask())
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+
+	args := strings.Split(strings.TrimSpace(r.file(t, "args")), "\n")
+	denied := strings.Split(args[slices.Index(args, "--disallowedTools")+1], ",")
+	for _, want := range append(slices.Clone(claude.DeniedTools), "Bash(npm publish*)") {
+		if !slices.Contains(denied, want) {
+			t.Errorf("refus = %q, attendu %s", denied, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(configHome, "skills", "review", "SKILL.md")); err != nil {
+		t.Fatalf("skill non installée : %v", err)
+	}
+}
+
+func TestTaskWithAConfigRevisionButNoConfigurationNeverStartsTheAgent(t *testing.T) {
+	r := launchTask(t, "commit", func(c *claude.Claude) { c.ConfigDir = filepath.Join(t.TempDir(), "absent") }, configTask())
+
+	if r.err == nil {
+		t.Fatalf("résultat = %+v, attendu une erreur", r.res)
+	}
+	if _, err := os.Stat(filepath.Join(r.log, "args")); !os.IsNotExist(err) {
+		t.Fatal("claude a été lancé sans sa configuration")
+	}
+}
+
+func TestTaskWithoutConfigRevisionIgnoresAStaleConfiguration(t *testing.T) {
+	cfg := agentConfig(t, "version: 1\ndeniedTools: [\"Bash(npm publish*)\"]\n")
+	r := launch(t, "noop", func(c *claude.Claude) { c.ConfigDir = cfg })
+
+	if strings.Contains(r.file(t, "args"), "npm publish") {
+		t.Fatal("configuration appliquée sans révision dans la tâche")
+	}
+}

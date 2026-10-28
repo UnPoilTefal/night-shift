@@ -122,6 +122,8 @@ type TicketReport struct {
 	CostUSD       float64
 	Duration      time.Duration
 	Transcript    string
+	// AgentConfig est la configuration de l'agent du ticket, dépôt@révision.
+	AgentConfig string `json:",omitempty"`
 }
 
 // RetriageReport est le constat d'un ticket sorti de la file sans être
@@ -454,6 +456,15 @@ func Follow(ctx context.Context, cfg Config, code forge.CodeForge, p Publisher, 
 	return red
 }
 
+// AgentConfig rend la configuration de l'agent d'une tâche, dépôt@révision,
+// ou "" sans configuration.
+func AgentConfig(task harness.Task) string {
+	if task.AgentConfigRevision == "" {
+		return ""
+	}
+	return task.AgentConfigRepo + "@" + task.AgentConfigRevision
+}
+
 // ciVerdict est la conclusion de l'attente de la CI d'un commit.
 type ciVerdict int
 
@@ -566,6 +577,7 @@ func Settle(ctx context.Context, cfg Config, src forge.TicketSource, code forge.
 	tr := TicketReport{
 		Repo: t.Repo, Number: t.Number, Title: t.Title,
 		CostUSD: res.CostUSD, Duration: res.Duration, Transcript: res.Transcript,
+		AgentConfig: AgentConfig(task),
 	}
 	// changeNote rattache le compte rendu à la demande de changement publiée,
 	// s'il y en a une.
@@ -610,6 +622,9 @@ func Settle(ctx context.Context, cfg Config, src forge.TicketSource, code forge.
 	}
 	tr.Outcome, tr.Reason = res.Outcome, res.Reason
 	comment += "\n\nRésultat provisoire : " + ProvisionalOutcome(res.Outcome)
+	if tr.AgentConfig != "" {
+		comment += "\n\nConfiguration de l'agent : " + tr.AgentConfig
+	}
 
 	cctx, cancel := cleanupContext(ctx)
 	defer cancel()

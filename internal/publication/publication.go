@@ -50,6 +50,11 @@ func (g Git) Publish(ctx context.Context, task harness.Task, res harness.Result)
 		}
 	}
 	repo := task.TargetRepo
+	// Le dépôt de la configuration de l'agent est une zone interdite à
+	// toutes ses passes : il n'évolue que par une PR fusionnée par un porteur.
+	if task.AgentConfigRepo != "" && repo == task.AgentConfigRepo {
+		return pass.Published{}, &pass.ZoneRefusalError{Reason: repo + " est le dépôt de la configuration de l'agent, interdit à toutes ses passes"}
+	}
 	remote := gitrepo.Remote{GitAccess: g.Code.GitAccess(repo), Token: g.Token}
 	tmp, err := os.MkdirTemp("", "night-shift-publish-")
 	if err != nil {

@@ -60,6 +60,10 @@ type Task struct {
 	// PriorCostUSD et PriorDuration cumulent les tours précédents.
 	PriorCostUSD  float64
 	PriorDuration time.Duration
+	// AgentConfigRepo et AgentConfigRevision désignent la configuration de
+	// l'agent lue par la sélection : son dépôt et la révision fusionnée
+	// remise à l'agent. Vides sans configuration.
+	AgentConfigRepo, AgentConfigRevision string
 }
 
 // Result est le compte rendu structuré d'un passage de l'agent.

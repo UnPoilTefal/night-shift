@@ -117,6 +117,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Docker Compose example (solo tier, no cluster): the same steps of the same binary on a single Docker host, with an embedded egress proxy and a static test of every guarantee ([#110](https://github.com/UnPoilTefal/night-shift/issues/110), [guide](docs/compose.md), [ADR 0013](docs/adr/0013-exemple-compose-second-systeme-d-execution.md))
 - [x] End-to-end test of the Compose example in CI: the real stack against a fake GitLab, in nine scenarios, from a full pass to a hostile agent ([#111](https://github.com/UnPoilTefal/night-shift/issues/111))
 - [x] No CI triggered on the draft PR: after `--ci-grace` with no check or status, the pass stops waiting and flags it apart from an unsettled CI ([#135](https://github.com/UnPoilTefal/night-shift/issues/135))
+- [x] Agent configuration read from a versioned repository: added refusals and skills, at the last merged revision, read-only for the agent, revision recorded for each ticket; the fixed refusals stay in the code ([#132](https://github.com/UnPoilTefal/night-shift/issues/132), [guide](docs/agent-config.md))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
 
@@ -148,6 +149,8 @@ A pass hands its work from one step to the next through two shared directories: 
 
 ```sh
 # 1. Selection (forge token): reserve the top ready ticket, clone the target repository.
+#    --agent-config owner/agent-config also reads the agent configuration (added refusals, skills)
+#    at its last merged revision and hands it to the agent read-only (see docs/agent-config.md).
 NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift select --repo owner/repo --state /state --work /work
 
 # 2. Agent (no forge token; refuses to start if a variable carries one, by name or by shape): run /implement through claude -p.

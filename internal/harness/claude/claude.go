@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/UnPoilTefal/night-shift/internal/agentconfig"
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/gitrepo"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
@@ -83,7 +84,10 @@ type Claude struct {
 	// OutDir, hors du clone, reçoit le motif d'un arrêt needs-info et la
 	// copie du transcript de la session.
 	OutDir string
-	Auth   Auth
+	// ConfigDir est la configuration de l'agent remise par la sélection, en
+	// lecture seule ; elle n'est lue que si la tâche en porte une révision.
+	ConfigDir string
+	Auth      Auth
 	// AllowedTools est la liste explicite des outils permis ;
 	// DefaultAllowedTools si elle est vide.
 	AllowedTools []string
@@ -121,6 +125,10 @@ func (c Claude) Run(ctx context.Context, task harness.Task) (harness.Result, err
 	}
 	env = append(env, "NIGHT_SHIFT_NEEDS_INFO="+needsInfo)
 
+	denied, err := c.applyConfig(env, task)
+	if err != nil {
+		return harness.Result{}, err
+	}
 	tools := c.AllowedTools
 	if len(tools) == 0 {
 		tools = DefaultAllowedTools
@@ -135,7 +143,7 @@ func (c Claude) Run(ctx context.Context, task harness.Task) (harness.Result, err
 		"--output-format", "json",
 		"--permission-mode", "dontAsk",
 		"--allowedTools", strings.Join(tools, ","),
-		"--disallowedTools", strings.Join(DeniedTools, ","),
+		"--disallowedTools", strings.Join(denied, ","),
 		"--add-dir", c.OutDir,
 	)
 	cmd.Dir = c.Dir
@@ -195,6 +203,29 @@ func (c Claude) Run(ctx context.Context, task harness.Task) (harness.Result, err
 	}
 	res.Outcome, res.Reason, res.Patches = harness.Succeeded, out.Result, patches
 	return res, nil
+}
+
+// applyConfig applique la configuration de l'agent de la tâche : ses skills
+// rejoignent le dossier de configuration de Claude Code, neuf à chaque tour,
+// et ses refus s'ajoutent aux refus fixes, qu'elle ne peut pas retirer. Il
+// rend les refus effectifs. Une tâche qui porte une révision sans
+// configuration lisible est une erreur : l'agent ne travaille jamais sans.
+func (c Claude) applyConfig(env []string, task harness.Task) ([]string, error) {
+	if task.AgentConfigRevision == "" {
+		return DeniedTools, nil
+	}
+	cfg, err := agentconfig.Load(c.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
+	dir := configDir(env)
+	if dir == "" {
+		return nil, errors.New("configuration de l'agent : ni CLAUDE_CONFIG_DIR ni HOME pour y installer les skills")
+	}
+	if err := agentconfig.CopySkills(c.ConfigDir, filepath.Join(dir, "skills")); err != nil {
+		return nil, fmt.Errorf("configuration de l'agent : skills : %w", err)
+	}
+	return append(slices.Clone(DeniedTools), cfg.DeniedTools...), nil
 }
 
 func (c Claude) prompt(task harness.Task, needsInfo string, tools []string) string {
@@ -305,14 +336,7 @@ func (c Claude) transcript(env []string, session string) string {
 	if strings.ContainsAny(session, `/\*?[`) {
 		return ""
 	}
-	dir := ""
-	for _, kv := range env {
-		if v, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok {
-			dir = v
-		} else if v, ok := strings.CutPrefix(kv, "HOME="); ok && dir == "" {
-			dir = filepath.Join(v, ".claude")
-		}
-	}
+	dir := configDir(env)
 	if dir == "" {
 		return ""
 	}
@@ -322,6 +346,20 @@ func (c Claude) transcript(env []string, session string) string {
 		return ""
 	}
 	return matches[0]
+}
+
+// configDir rend le dossier de configuration de Claude Code selon env :
+// CLAUDE_CONFIG_DIR, sinon HOME/.claude, sinon "".
+func configDir(env []string) string {
+	dir := ""
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok {
+			dir = v
+		} else if v, ok := strings.CutPrefix(kv, "HOME="); ok && dir == "" {
+			dir = filepath.Join(v, ".claude")
+		}
+	}
+	return dir
 }
 
 // copyTranscript copie le transcript dans la sortie de l'étape, pour que les

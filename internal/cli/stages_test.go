@@ -118,6 +118,8 @@ type world struct {
 	state, work, log string
 	// state2 et work2 sont les volumes du tour de relance.
 	state2, work2 string
+	// selectArgs s'ajoutent aux arguments de select.
+	selectArgs []string
 }
 
 // testOptIn est l'adhésion du dépôt o/a, servie par l'API et versionnée
@@ -147,7 +149,7 @@ func newWorld(t *testing.T) *world {
 func (w *world) selectStage(t *testing.T) string {
 	t.Helper()
 	t.Setenv(cli.TokenEnv, secret)
-	code, stdout, stderr := run("select", "--repo", "o/a", "--api-url", w.api, "--git-url", w.remote.Base, "--state", w.state, "--work", w.work)
+	code, stdout, stderr := run(append([]string{"select", "--repo", "o/a", "--api-url", w.api, "--git-url", w.remote.Base, "--state", w.state, "--work", w.work}, w.selectArgs...)...)
 	if code != 0 {
 		t.Fatalf("select : code %d\n%s\n%s", code, stdout, stderr)
 	}
