@@ -195,6 +195,28 @@ func (c *Client) UpdatedTickets(ctx context.Context, repo string, since time.Tim
 	}
 }
 
+// Ticket implémente forge.Sandbox.
+func (c *Client) Ticket(ctx context.Context, repo string, number int) (forge.Ticket, error) {
+	var i issue
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/issues/%d", repo, number), nil, &i); err != nil {
+		return forge.Ticket{}, err
+	}
+	if i.PullRequest != nil {
+		return forge.Ticket{}, fmt.Errorf("%s#%d est une pull request, pas un ticket", repo, number)
+	}
+	return c.ticket(ctx, repo, i)
+}
+
+// CloseTicket implémente forge.Sandbox.
+func (c *Client) CloseTicket(ctx context.Context, repo string, number int) error {
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/issues/%d", repo, number), map[string]string{"state": "closed"}, nil)
+}
+
+// CloseChangeRequest implémente forge.Sandbox.
+func (c *Client) CloseChangeRequest(ctx context.Context, repo string, number int) error {
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/pulls/%d", repo, number), map[string]string{"state": "closed"}, nil)
+}
+
 // PutIssue implémente forge.TicketSource : l'issue ouverte de même label et
 // de même titre voit son corps remplacé ; sinon une issue est ouverte avec
 // le label, que GitHub crée s'il n'existe pas.

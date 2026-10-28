@@ -387,15 +387,8 @@ func (c *Client) UpdatedTickets(ctx context.Context, repo string, since time.Tim
 			return nil, err
 		}
 		for _, i := range batch {
-			associated, err := c.associated(ctx, repo, i.Author, members)
+			t, err := c.fullTicket(ctx, repo, i, members)
 			if err != nil {
-				return nil, err
-			}
-			t := forge.Ticket{
-				Repo: repo, Number: i.IID, Title: i.Title, Body: i.Description,
-				Author: i.Author.Username, AuthorAssociated: associated, Labels: i.Labels, CreatedAt: i.CreatedAt,
-			}
-			if t.Comments, err = c.notes(ctx, repo, i.IID, members); err != nil {
 				return nil, err
 			}
 			ts = append(ts, t)
@@ -404,6 +397,40 @@ func (c *Client) UpdatedTickets(ctx context.Context, repo string, since time.Tim
 			return ts, nil
 		}
 	}
+}
+
+// fullTicket complète une issue de l'association de son auteur et de ses
+// notes ; members met en cache l'association des auteurs.
+func (c *Client) fullTicket(ctx context.Context, repo string, i issue, members map[int]bool) (forge.Ticket, error) {
+	associated, err := c.associated(ctx, repo, i.Author, members)
+	if err != nil {
+		return forge.Ticket{}, err
+	}
+	t := forge.Ticket{
+		Repo: repo, Number: i.IID, Title: i.Title, Body: i.Description,
+		Author: i.Author.Username, AuthorAssociated: associated, Labels: i.Labels, CreatedAt: i.CreatedAt,
+	}
+	t.Comments, err = c.notes(ctx, repo, i.IID, members)
+	return t, err
+}
+
+// Ticket implémente forge.Sandbox.
+func (c *Client) Ticket(ctx context.Context, repo string, number int) (forge.Ticket, error) {
+	var i issue
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/issues/%d", project(repo), number), nil, &i); err != nil {
+		return forge.Ticket{}, err
+	}
+	return c.fullTicket(ctx, repo, i, map[int]bool{})
+}
+
+// CloseTicket implémente forge.Sandbox.
+func (c *Client) CloseTicket(ctx context.Context, repo string, number int) error {
+	return c.do(ctx, http.MethodPut, fmt.Sprintf("%s/issues/%d", project(repo), number), map[string]string{"state_event": "close"}, nil)
+}
+
+// CloseChangeRequest implémente forge.Sandbox.
+func (c *Client) CloseChangeRequest(ctx context.Context, repo string, number int) error {
+	return c.do(ctx, http.MethodPut, fmt.Sprintf("%s/merge_requests/%d", project(repo), number), map[string]string{"state_event": "close"}, nil)
 }
 
 // PutIssue implémente forge.TicketSource : l'issue ouverte de même label et

@@ -241,3 +241,17 @@ type CodeForge interface {
 	// disent qui les a écrits.
 	ChangeRequestCommits(ctx context.Context, repo string, number int) ([]string, error)
 }
+
+// Sandbox administre un dépôt jetable : seul le lanceur de l'épreuve s'en
+// sert, pour relire l'état d'un cas et nettoyer ce qu'il a créé ; une passe
+// ne s'en sert jamais.
+type Sandbox interface {
+	// Ticket relit un ticket, ouvert ou fermé, avec son corps, ses labels et
+	// ses commentaires.
+	Ticket(ctx context.Context, repo string, number int) (Ticket, error)
+	// CloseTicket ferme un ticket ; le fermer deux fois n'est pas une erreur.
+	CloseTicket(ctx context.Context, repo string, number int) error
+	// CloseChangeRequest ferme une demande de changement sans la fusionner ;
+	// la fermer deux fois n'est pas une erreur.
+	CloseChangeRequest(ctx context.Context, repo string, number int) error
+}

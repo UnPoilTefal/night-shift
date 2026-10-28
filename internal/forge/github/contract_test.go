@@ -66,6 +66,7 @@ func newAPI(t *testing.T) *api {
 
 func (a *api) Tickets() forge.TicketSource { return a.client }
 func (a *api) Code() forge.CodeForge       { return a.client }
+func (a *api) Sandbox() forge.Sandbox      { return a.client }
 
 func (a *api) AddTicket(t forge.Ticket, closed bool) {
 	a.mu.Lock()
@@ -112,7 +113,7 @@ func (a *api) Ticket(repo string, number int) forgetest.Ticket {
 	if i == nil || i.pull != nil {
 		panic(fmt.Sprintf("issue %s#%d inconnue", repo, number))
 	}
-	return forgetest.Ticket{Title: i.Title, Body: i.Body, Labels: slices.Clone(i.Labels), Comments: bodies(i.comments)}
+	return forgetest.Ticket{Title: i.Title, Body: i.Body, Labels: slices.Clone(i.Labels), Comments: bodies(i.comments), Closed: i.closed}
 }
 
 func (a *api) ChangeRequest(repo string, number int) forgetest.ChangeRequest {
@@ -124,7 +125,7 @@ func (a *api) ChangeRequest(repo string, number int) forgetest.ChangeRequest {
 	}
 	cr := *i.pull
 	cr.Labels = slices.Clone(i.Labels)
-	return forgetest.ChangeRequest{ChangeRequest: cr, Draft: i.draft, Comments: bodies(i.comments)}
+	return forgetest.ChangeRequest{ChangeRequest: cr, Draft: i.draft, Comments: bodies(i.comments), Closed: i.state == forge.ChangeClosed}
 }
 
 func (a *api) RepoLabels(repo string) []string {
@@ -172,10 +173,37 @@ func (a *api) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		var body struct{ Body string }
+		var body struct{ Body, State *string }
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		i.Body, i.updated = body.Body, time.Now()
+		if body.Body != nil {
+			i.Body = *body.Body
+		}
+		if body.State != nil {
+			i.closed = *body.State == "closed"
+		}
+		i.updated = time.Now()
 		_ = json.NewEncoder(w).Encode(map[string]any{"number": i.Number, "html_url": "https://github.example/" + repo + "/issues/" + strconv.Itoa(i.Number)})
+	case r.Method == http.MethodGet && len(route) == 2 && route[0] == "issues":
+		n, _ := strconv.Atoi(route[1])
+		i := a.find(repo, n)
+		if i == nil {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(issueJSON(repo, i))
+	case r.Method == http.MethodPatch && len(route) == 2 && route[0] == "pulls":
+		n, _ := strconv.Atoi(route[1])
+		i := a.find(repo, n)
+		if i == nil || i.pull == nil {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct{ State string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.State == "closed" && i.state != forge.ChangeMerged {
+			i.closed, i.state, i.closedAt, i.updated = true, forge.ChangeClosed, time.Now(), time.Now()
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"number": i.Number, "state": "closed"})
 	case r.Method == http.MethodGet && len(route) == 1 && route[0] == "pulls":
 		a.listPulls(w, r, repo)
 	case r.Method == http.MethodGet && len(route) == 3 && route[0] == "pulls" && route[2] == "commits":
@@ -220,9 +248,6 @@ func (a *api) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 
 func (a *api) listIssues(w http.ResponseWriter, r *http.Request, repo string) {
 	q := r.URL.Query()
-	type label struct {
-		Name string `json:"name"`
-	}
 	out := []map[string]any{}
 	since, _ := time.Parse(time.RFC3339, q.Get("since"))
 	if page, _ := strconv.Atoi(q.Get("page")); page <= 1 {
@@ -230,27 +255,35 @@ func (a *api) listIssues(w http.ResponseWriter, r *http.Request, repo string) {
 			if (q.Get("state") == "open" && i.closed) || (q.Get("labels") != "" && !slices.Contains(i.Labels, q.Get("labels"))) || i.updated.Before(since) {
 				continue
 			}
-			var labels []label
-			for _, l := range i.Labels {
-				labels = append(labels, label{l})
-			}
-			association := "NONE"
-			if i.AuthorAssociated {
-				association = "OWNER"
-			}
-			e := map[string]any{
-				"number": i.Number, "html_url": "https://github.example/" + repo + "/issues/" + strconv.Itoa(i.Number),
-				"title": i.Title, "body": i.Body, "created_at": i.CreatedAt,
-				"user": map[string]string{"login": i.Author}, "author_association": association, "labels": labels,
-				"issue_dependencies_summary": map[string]int{"blocked_by": i.OpenBlockers},
-			}
-			if i.pull != nil {
-				e["pull_request"] = map[string]any{}
-			}
-			out = append(out, e)
+			out = append(out, issueJSON(repo, i))
 		}
 	}
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// issueJSON rend une issue ou une PR telle que l'API des issues la sert.
+func issueJSON(repo string, i *ghIssue) map[string]any {
+	type label struct {
+		Name string `json:"name"`
+	}
+	var labels []label
+	for _, l := range i.Labels {
+		labels = append(labels, label{l})
+	}
+	association := "NONE"
+	if i.AuthorAssociated {
+		association = "OWNER"
+	}
+	e := map[string]any{
+		"number": i.Number, "html_url": "https://github.example/" + repo + "/issues/" + strconv.Itoa(i.Number),
+		"title": i.Title, "body": i.Body, "created_at": i.CreatedAt,
+		"user": map[string]string{"login": i.Author}, "author_association": association, "labels": labels,
+		"issue_dependencies_summary": map[string]int{"blocked_by": i.OpenBlockers},
+	}
+	if i.pull != nil {
+		e["pull_request"] = map[string]any{}
+	}
+	return e
 }
 
 // listPulls sert les PR d'un dépôt, les plus récentes d'abord.
