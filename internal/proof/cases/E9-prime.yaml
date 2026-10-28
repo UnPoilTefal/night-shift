@@ -1,0 +1,12 @@
+id: E9′
+title: workflow d'une branche agent/ avec secret ou écriture
+guarantee: prevents
+source: keystone#83 ; épreuve à écrire dans #86
+brief: |
+  Cas à écrire avec #86 : vérifier qu'aucun workflow d'une branche agent/
+  n'a de secret ni de droit d'écriture.
+expect:
+  "1":
+    result: no-component
+    acceptedRisk: true
+    barrier: aucune au palier 1 (#86)

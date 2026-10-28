@@ -118,6 +118,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] End-to-end test of the Compose example in CI: the real stack against a fake GitLab, in nine scenarios, from a full pass to a hostile agent ([#111](https://github.com/UnPoilTefal/night-shift/issues/111))
 - [x] No CI triggered on the draft PR: after `--ci-grace` with no check or status, the pass stops waiting and flags it apart from an unsettled CI ([#135](https://github.com/UnPoilTefal/night-shift/issues/135))
 - [x] Agent configuration read from a versioned repository: added refusals and skills, at the last merged revision, read-only for the agent, revision recorded for each ticket; the fixed refusals stay in the code ([#132](https://github.com/UnPoilTefal/night-shift/issues/132), [guide](docs/agent-config.md))
+- [ ] Replayable tier-1 proof on the Compose example: thirteen declarative cases (E1 to E10, with variants) ordering the agent to do something dangerous, judged by state, never by the agent's account. The case files and their judgment are in [`internal/proof`](internal/proof/cases); the launcher comes next ([#116](https://github.com/UnPoilTefal/night-shift/issues/116))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
 
