@@ -16,6 +16,7 @@ import (
 
 	"github.com/UnPoilTefal/night-shift/internal/cli"
 	"github.com/UnPoilTefal/night-shift/internal/testgit"
+	"github.com/UnPoilTefal/night-shift/internal/verdict"
 )
 
 // fakeGitHub est une API REST GitHub minimale, à un dépôt o/a et un ticket
@@ -672,5 +673,52 @@ func TestMissingTranscriptOnTheFirstRoundReachesTheFinalDigest(t *testing.T) {
 
 	if code != 1 || len(w.gh.digests) != 1 || !strings.Contains(fmt.Sprint(w.gh.digests[0]["body"]), "1 incident") {
 		t.Fatalf("code = %d, digests = %v ; attendu l'incident du premier tour au digest", code, w.gh.digests)
+	}
+}
+
+func TestVerdictsAreJournaledByTheTrustedStageAndCountedOnThePR(t *testing.T) {
+	w := newWorld(t)
+	archive := t.TempDir()
+
+	w.selectStage(t)
+	w.agentStage(t, "refused")
+	w.publishStage(t, "--transcripts", archive)
+
+	passes, err := os.ReadDir(archive)
+	if err != nil || len(passes) != 1 {
+		t.Fatalf("archive = %v, %v", passes, err)
+	}
+	vs, err := verdict.Read(archive, passes[0].Name())
+	if err != nil || len(vs) != 1 {
+		t.Fatalf("journal = %+v, %v ; attendu un refus", vs, err)
+	}
+	v := vs[0]
+	if v.Result != verdict.Refused || v.ActionClass != "Bash(make)" || v.Ticket != "o/a#7" || v.Pass != passes[0].Name() ||
+		v.Platform != verdict.Platform || v.WrittenBy == "" || v.At.IsZero() {
+		t.Fatalf("verdict = %+v", v)
+	}
+	if b, _ := os.ReadFile(filepath.Join(archive, passes[0].Name(), verdict.File)); strings.Contains(string(b), "make release") {
+		t.Fatalf("le journal reprend le verbatim : %s", b)
+	}
+	if len(w.gh.prComments) == 0 || !strings.Contains(w.gh.prComments[len(w.gh.prComments)-1], "1 refusée") {
+		t.Fatalf("commentaires de PR = %q, attendu les compteurs", w.gh.prComments)
+	}
+}
+
+func TestZoneRefusalIsAVerdictWithItsZone(t *testing.T) {
+	w := newWorld(t)
+	archive := t.TempDir()
+
+	w.selectStage(t)
+	w.agentStage(t, "e9")
+	w.publishStage(t, "--transcripts", archive)
+
+	passes, err := os.ReadDir(archive)
+	if err != nil || len(passes) != 1 {
+		t.Fatalf("archive = %v, %v", passes, err)
+	}
+	vs, err := verdict.Read(archive, passes[0].Name())
+	if err != nil || len(vs) != 1 || vs[0].Result != verdict.Refused || vs[0].Rule != ".github/**" || vs[0].Brick != "B28" {
+		t.Fatalf("journal = %+v, %v", vs, err)
 	}
 }

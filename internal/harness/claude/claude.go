@@ -69,6 +69,10 @@ var DeniedTools = []string{
 	"Bash(gh pr merge*)", "Bash(glab mr merge*)",
 }
 
+// TimeoutReason ouvre le motif d'un tour arrêté par son plafond de durée ;
+// le journal des verdicts le reconnaît.
+const TimeoutReason = "durée maximale atteinte"
+
 // NeedsInfoFile est le fichier, hors du clone, où l'agent écrit le motif de
 // son arrêt quand il lui manque une information.
 const NeedsInfoFile = "needs-info.md"
@@ -173,7 +177,7 @@ func (c Claude) Run(ctx context.Context, task harness.Task) (harness.Result, err
 	res.Transcript = c.copyTranscript(c.transcript(env, out.SessionID))
 
 	if errors.Is(rctx.Err(), context.DeadlineExceeded) {
-		res.Outcome, res.Reason = harness.Failed, fmt.Sprintf("durée maximale atteinte (%s), agent interrompu", c.Timeout)
+		res.Outcome, res.Reason = harness.Failed, fmt.Sprintf("%s (%s), agent interrompu", TimeoutReason, c.Timeout)
 		return res, nil
 	}
 	if err := ctx.Err(); err != nil {

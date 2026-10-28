@@ -14,6 +14,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/UnPoilTefal/night-shift/internal/relay"
+	"github.com/UnPoilTefal/night-shift/internal/verdict"
 )
 
 // Valeurs par défaut.
@@ -206,7 +207,15 @@ func (s *Service) Tick(now time.Time) error {
 	s.mu.Lock()
 	var err error
 	if s.active != nil && now.Sub(s.active.Started) >= s.cfg.Watchdog {
+		pass := s.active.Pass
 		err = s.close(Failed, "durée maximale de la passe dépassée ("+s.cfg.Watchdog.String()+") : aucune étape ne l'a close")
+		if s.cfg.Transcripts != "" {
+			err = cmp.Or(err, verdict.Append(s.cfg.Transcripts, verdict.Verdict{
+				At: now.UTC(), Platform: verdict.Platform, Pass: pass,
+				Brick: "B17", Realization: "chien de garde de control (--watchdog)", Rule: s.cfg.Watchdog.String(),
+				Result: verdict.Stopped, Effect: true, ActionClass: "passe", WrittenBy: "control",
+			}))
+		}
 	}
 	due := s.cfg.Schedule != nil && !now.Before(s.next)
 	if due {
