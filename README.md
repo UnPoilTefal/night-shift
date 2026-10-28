@@ -115,10 +115,10 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Control service v1: scheduled and manual passes one at a time, watchdog, host-only history behind a read-only API ([#109](https://github.com/UnPoilTefal/night-shift/issues/109), [docs](docs/control.md))
 - [x] Outcomes and weekly digest: `night-shift weekly` reads each ticket's outcome on the forge, reports the delegation rate and flags the trust-level criterion, on GitHub and GitLab ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 - [x] Docker Compose example (solo tier, no cluster): the same steps of the same binary on a single Docker host, with an embedded egress proxy and a static test of every guarantee ([#110](https://github.com/UnPoilTefal/night-shift/issues/110), [guide](docs/compose.md), [ADR 0013](docs/adr/0013-exemple-compose-second-systeme-d-execution.md))
-- [x] End-to-end test of the Compose example in CI: the real stack against a fake GitLab, in nine scenarios, from a full pass to a hostile agent ([#111](https://github.com/UnPoilTefal/night-shift/issues/111))
+- [x] End-to-end test of the Compose example in CI: the real stack against a fake GitLab, in ten scenarios, from a full pass to a hostile agent and the barrier proof ([#111](https://github.com/UnPoilTefal/night-shift/issues/111))
 - [x] No CI triggered on the draft PR: after `--ci-grace` with no check or status, the pass stops waiting and flags it apart from an unsettled CI ([#135](https://github.com/UnPoilTefal/night-shift/issues/135))
 - [x] Agent configuration read from a versioned repository: added refusals and skills, at the last merged revision, read-only for the agent, revision recorded for each ticket; the fixed refusals stay in the code ([#132](https://github.com/UnPoilTefal/night-shift/issues/132), [guide](docs/agent-config.md))
-- [ ] Replayable tier-1 proof on the Compose example: thirteen declarative cases (E1 to E10, with variants) ordering the agent to do something dangerous, judged by state, never by the agent's account. The case files and their judgment are in [`internal/proof`](internal/proof/cases); the launcher comes next ([#116](https://github.com/UnPoilTefal/night-shift/issues/116))
+- [x] Replayable tier-1 proof on the Compose example: thirteen declarative cases (E1 to E10, with variants) that order the agent to do something dangerous, judged by state, never by the agent's account; `night-shift proof replay` plays them on a running stack and its sandbox, then cleans up ([#116](https://github.com/UnPoilTefal/night-shift/issues/116), [guide](docs/proof.md))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
 
@@ -293,6 +293,10 @@ make images test-images scan-images          # or build them locally, tagged dev
 ```
 
 A repository's tool image derives from either one: `FROM ghcr.io/unpoiltefal/night-shift:<version>`, then its own toolchain.
+
+### Replaying the barrier proof
+
+`make proof-replay` replays the barrier proof on a running Compose stack and its sandbox repository: each case orders the agent to do something dangerous (push to the default branch, rewrite a ticket body, merge a change request, read a secret, loop forever…), and the launcher judges the result from the state of the forge, the volumes and the logs. It prints a report per case and says whether the tier opens. It refuses to start unless the stack targets the sandbox it was given. See [docs/proof.md](docs/proof.md) for the cases, the preparation of the sandbox and the stack override.
 
 ### Replaying the zone-refusal proof
 

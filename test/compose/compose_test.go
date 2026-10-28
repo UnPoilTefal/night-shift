@@ -3,7 +3,7 @@
 // Package compose est le test de bout en bout de l'exemple Docker Compose
 // (examples/compose, ADR 0013). Il fait tourner la stack réelle, avec les
 // images construites depuis l'arbre, contre une fausse forge GitLab lancée
-// sur l'hôte, et constate chaque garantie en neuf scénarios. Il exige Docker
+// sur l'hôte, et constate chaque garantie en dix scénarios. Il exige Docker
 // Engine 28 ou plus, et échoue au lieu de s'ignorer : make test-compose.
 package compose
 
@@ -30,6 +30,8 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/forge/gitlab"
 	"github.com/UnPoilTefal/night-shift/internal/forge/gitlab/gitlabtest"
 	"github.com/UnPoilTefal/night-shift/internal/pass"
+	"github.com/UnPoilTefal/night-shift/internal/proof"
+	pstack "github.com/UnPoilTefal/night-shift/internal/proof/stack"
 	"github.com/UnPoilTefal/night-shift/internal/relay"
 	"github.com/UnPoilTefal/night-shift/internal/testgit"
 )
@@ -99,6 +101,66 @@ func TestComposeStack(t *testing.T) {
 	scenario("7 marqueur forgé", s.forgedDone)
 	scenario("8 regroupement", s.coalescing)
 	scenario("9 transcripts", s.transcripts)
+	scenario("10 épreuve", s.proof)
+}
+
+// proofModes choisit le comportement du faux agent pour chaque cas de
+// l'épreuve joué ici : il obéit à l'ordre, seule la structure l'arrête.
+var proofModes = map[string]string{"E1": "proof-push", "E4": "proof-rm", "E6": "proof-secret", "E9": "e9", "E9′": "noop"}
+
+// proof rejoue des cas de l'épreuve (#116) par son lanceur, contre la stack
+// et la fausse forge : le lanceur prépare, déclenche, observe et nettoie, et
+// chaque cas joué doit être bloqué, E9′ rapporté sans composant.
+func (s *stack) proof(t *testing.T) {
+	cases, err := proof.Cases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases = slices.DeleteFunc(cases, func(c proof.Case) bool { _, ok := proofModes[c.ID]; return !ok })
+	// Le lanceur ouvre ses tickets sous le compte du jeton, membre du projet.
+	s.forge.AddMember(repo, gitlabtest.Bot, gitlab.Developer, false)
+	api, git := gitlab.Instance(s.forge.Base)
+	compose := []string{"docker", "compose", "--project-name", project,
+		"--file", filepath.Join(exampleDir(t), "compose.yaml"), "--file", "compose.test.yaml"}
+	var log bytes.Buffer
+	terrain := pstack.New(pstack.Config{
+		Repo: repo, Forge: gitlab.New(api, git, forgeToken), Token: forgeToken, CIPath: ".gitlab-ci.yml",
+		Compose: compose, Project: project, Env: s.env, Image: registry + "/night-shift:" + e2eTag,
+		AdminURL: adminURL, AdminToken: controlToken, BlockedHost: "example.com", PassTimeout: passTimeout,
+		Hint: func(c proof.Case) string { return "fake-claude: " + proofModes[c.ID] }, Log: &log,
+	})
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("déroulé du lanceur :\n%s", log.String())
+		}
+	})
+
+	outcomes := proof.Replay(context.Background(), terrain, "1", cases, &log)
+	report := proof.Report("1", outcomes)
+
+	for _, o := range outcomes {
+		if o.Err != nil {
+			t.Errorf("%s : %v", o.Case.ID, o.Err)
+		}
+		if !o.Reached() {
+			t.Errorf("%s : %s, attendu %s (%+v)", o.Case.ID, o.Result, o.Expect.Result, o.Findings)
+		}
+	}
+	if !proof.Open(outcomes) || !strings.Contains(report, "**ouvert**") {
+		t.Errorf("rapport :\n%s", report)
+	}
+	// Le lanceur ne laisse rien derrière lui : ni ticket ouvert, ni branche
+	// d'agent, ni demande de changement ouverte.
+	for _, i := range s.forge.Issues(repo) {
+		if strings.HasPrefix(i.Title, "night-shift : épreuve") && !i.Closed {
+			t.Errorf("ticket de l'épreuve resté ouvert : #%d %s", i.IID, i.Title)
+		}
+	}
+	for _, m := range s.forge.MergeRequests(repo) {
+		if m.State == "opened" && strings.Contains(m.Title, "épreuve") {
+			t.Errorf("demande de changement de l'épreuve restée ouverte : !%d", m.IID)
+		}
+	}
 }
 
 // up vérifie Docker, construit les images de test, lance la fausse forge,
