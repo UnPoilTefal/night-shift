@@ -7,10 +7,13 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/UnPoilTefal/night-shift/internal/agentconfig"
 	"github.com/UnPoilTefal/night-shift/internal/forge"
 	"github.com/UnPoilTefal/night-shift/internal/gitrepo"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
@@ -45,6 +48,7 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 	var next stage.Dirs
 	fs.StringVar(&next.State, "next-state", "", "en relais : volume de la tâche du tour de relance, vidé avant chaque passe")
 	fs.StringVar(&next.Work, "next-work", "", "en relais : volume de travail du tour de relance, vidé avant chaque passe")
+	agentConfig := fs.String("agent-config", "", "dépôt de la configuration de l'agent, lue à la dernière révision de sa branche par défaut ; interdit à toutes les passes")
 	rf := addRelayFlags(fs, true)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -53,18 +57,27 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "select : au moins un --repo, --state et --work sont requis")
 		return 2
 	}
+	if slices.Contains(repos, *agentConfig) {
+		_, _ = fmt.Fprintf(stderr, "select : %s est le dépôt de la configuration de l'agent, il ne peut pas être un dépôt candidat\n", *agentConfig)
+		return 2
+	}
 	if !rf.valid("select", stderr) {
 		return 2
 	}
-	f, token, ok := ff.open("select", stderr, repos...)
+	checked := repos
+	if *agentConfig != "" {
+		checked = append(slices.Clone(repos), *agentConfig)
+	}
+	f, token, ok := ff.open("select", stderr, checked...)
 	if !ok {
 		return 2
 	}
 
 	ctx, stop := stageContext()
 	defer stop()
+	sel := selection{f: f, token: token, forge: ff.name, repos: repos, agentConfig: *agentConfig}
 	once := func(ctx context.Context, passID string) (pass.Report, bool, int) {
-		return selectOnce(ctx, f, token, ff.name, repos, *d, passID, stdout, stderr)
+		return selectOnce(ctx, sel, *d, passID, stdout, stderr)
 	}
 	if !rf.on {
 		_, _, code := once(ctx, "pass-"+time.Now().UTC().Format("20060102T150405Z"))
@@ -77,19 +90,42 @@ func runSelect(args []string, stdout, stderr io.Writer) int {
 	return relaySelect(ctx, rf, rep, *d, clean, once)
 }
 
-// selectOnce fait un tour de sélection pour la passe passID : il réserve au
-// plus un ticket, prépare son clone et écrit la tâche et le rapport. Il rend
-// le rapport, si un ticket est confié à l'agent, et le code de sortie.
-func selectOnce(ctx context.Context, f Forge, token, forgeName string, repos []string, d stage.Dirs, passID string, stdout, stderr io.Writer) (pass.Report, bool, int) {
-	cfg := pass.Config{Repos: repos, MaxTickets: 1, ID: passID, Now: time.Now}
-	report, tasks, err := pass.Select(ctx, cfg, f, f)
+// selection règle la sélection d'une passe.
+type selection struct {
+	f            Forge
+	token, forge string
+	repos        []string
+	// agentConfig est le dépôt de la configuration de l'agent, s'il y en a.
+	agentConfig string
+}
+
+// selectOnce fait un tour de sélection pour la passe passID : il lit la
+// configuration de l'agent, réserve au plus un ticket, prépare son clone et
+// écrit la tâche et le rapport. Il rend le rapport, si un ticket est confié
+// à l'agent, et le code de sortie. Une configuration illisible arrête la
+// sélection avant toute réservation : l'agent ne travaille jamais sans elle.
+func selectOnce(ctx context.Context, s selection, d stage.Dirs, passID string, stdout, stderr io.Writer) (pass.Report, bool, int) {
+	f := s.f
+	cfg := pass.Config{Repos: s.repos, MaxTickets: 1, ID: passID, Now: time.Now}
+	revision, err := readAgentConfig(ctx, s, d)
+	var report pass.Report
+	var tasks []harness.Task
 	if err != nil {
-		report.Errors = append(report.Errors, err.Error())
+		now := time.Now()
+		report = pass.Report{ID: passID, Started: now, Finished: now, Errors: []string{"configuration de l'agent : " + err.Error()}}
+	} else {
+		report, tasks, err = pass.Select(ctx, cfg, f, f)
+		if err != nil {
+			report.Errors = append(report.Errors, err.Error())
+		}
 	}
 	reserved := false
 	for _, task := range tasks {
-		task.Forge = forgeName
-		perr := prepare(ctx, d, f, token, &task)
+		task.Forge = s.forge
+		if revision != "" {
+			task.AgentConfigRepo, task.AgentConfigRevision = s.agentConfig, revision
+		}
+		perr := prepare(ctx, d, f, s.token, &task)
 		if perr == nil {
 			reserved = true
 			continue
@@ -121,6 +157,34 @@ func selectOnce(ctx context.Context, f Forge, token, forgeName string, repos []s
 		return report, reserved, 1
 	}
 	return report, reserved, 0
+}
+
+// readAgentConfig recopie la configuration de l'agent de son dépôt, à la
+// tête de sa branche par défaut, dans le volume de la tâche, et rend sa
+// révision ; sans dépôt de configuration, elle rend "". Le clone, qui a vu
+// le jeton, ne quitte pas le dossier temporaire de l'étape.
+func readAgentConfig(ctx context.Context, s selection, d stage.Dirs) (string, error) {
+	if err := os.RemoveAll(d.AgentConfigDir()); err != nil {
+		return "", err
+	}
+	if s.agentConfig == "" {
+		return "", nil
+	}
+	tmp, err := os.MkdirTemp("", "night-shift-agent-config-")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	dir := filepath.Join(tmp, "repo")
+	_, sha, err := gitrepo.Remote{GitAccess: s.f.GitAccess(s.agentConfig), Token: s.token}.Clone(ctx, dir)
+	if err != nil {
+		return "", fmt.Errorf("clone de %s : %w", s.agentConfig, err)
+	}
+	if err := agentconfig.Copy(dir, d.AgentConfigDir()); err != nil {
+		_ = os.RemoveAll(d.AgentConfigDir())
+		return "", fmt.Errorf("%s@%s : %w", s.agentConfig, sha, err)
+	}
+	return sha, nil
 }
 
 // prepare clone le dépôt cible de la tâche par l'accès git de sa forge de
@@ -162,7 +226,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	h := claude.Claude{
-		Bin: *bin, Dir: d.RepoDir(), OutDir: d.OutDir(),
+		Bin: *bin, Dir: d.RepoDir(), OutDir: d.OutDir(), ConfigDir: d.AgentConfigDir(),
 		Auth: claude.Auth(*auth), AllowedTools: splitList(*tools), Skill: *skill,
 		Timeout: *timeout, Secrets: append(ForgeSecretEnv(), WebhookEnv),
 	}
@@ -411,6 +475,16 @@ func prepareRetry(ctx context.Context, d, next stage.Dirs, remote gitrepo.Remote
 	}
 	if err := os.MkdirAll(next.OutDir(), 0o755); err != nil { // #nosec G301 -- écrit par l'agent, lu par la Publication
 		return err
+	}
+	// La relance garde la configuration du premier tour : un ticket est jugé
+	// sur une seule révision.
+	if err := os.RemoveAll(next.AgentConfigDir()); err != nil {
+		return err
+	}
+	if task.AgentConfigRevision != "" {
+		if err := agentconfig.Copy(d.AgentConfigDir(), next.AgentConfigDir()); err != nil {
+			return err
+		}
 	}
 	report, ok, err := d.ReadReport()
 	if err != nil {

@@ -84,6 +84,11 @@ Ce qui tourne à la place de l'agent pour un ticket (image, commande, harnais, o
 _FR_: profil d'exécution
 _Avoid_: runtime, template, exécuteur
 
+**Agent configuration**:
+L'ensemble versionné de ce qui garde l'agent et de ce qu'il lit (refus ajoutés, skills), distinct de l'image : l'image porte les outils, la configuration est faite de données. Une étape de confiance la lit dans son propre dépôt, à la dernière révision fusionnée, et la remet à l'agent en lecture seule ; la révision est enregistrée pour chaque ticket. Elle ne peut qu'ajouter des refus aux refus fixes du harness, jamais en retirer, et son dépôt est une zone interdite à toutes les passes. Un enseignement promu n'oblige jamais à reconstruire une image.
+_FR_: configuration de l'agent
+_Avoid_: profil (c'est le profil d'exécution), settings, réglages
+
 **Publication**:
 L'étape de confiance, sans modèle, qui transforme le patch produit par l'agent en branche `agent/` et en demande de changement. Elle seule pousse du code sur la forge.
 _FR_: publication

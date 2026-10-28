@@ -2,6 +2,7 @@ package publication_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/forge/memforge"
 	"github.com/UnPoilTefal/night-shift/internal/harness"
 	"github.com/UnPoilTefal/night-shift/internal/optin"
+	"github.com/UnPoilTefal/night-shift/internal/pass"
 	"github.com/UnPoilTefal/night-shift/internal/publication"
 	"github.com/UnPoilTefal/night-shift/internal/testgit"
 )
@@ -232,5 +234,19 @@ func TestRetryRoundRefusesABranchOutsideAgentPrefix(t *testing.T) {
 	}
 	if got := remote.Out("rev-parse", "main"); got != task.BaseSHA {
 		t.Fatal("la branche main a bougé")
+	}
+}
+
+func TestAgentConfigRepoIsForbiddenToEveryPass(t *testing.T) {
+	task := harness.Task{
+		Ticket: forge.Ticket{Repo: "o/agent-config", Number: 1}, TargetRepo: "o/agent-config",
+		AgentConfigRepo: "o/agent-config", AgentConfigRevision: "abc",
+	}
+
+	_, err := publication.Git{}.Publish(context.Background(), task, harness.Result{Patches: [][]byte{[]byte("p")}})
+
+	var refusal *pass.ZoneRefusalError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("erreur = %v, attendu un refus de zone", err)
 	}
 }
