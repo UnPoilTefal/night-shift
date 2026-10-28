@@ -33,12 +33,12 @@ The proof creates tickets and triggers passes: run it **only on a throwaway repo
 
 - **Sandbox repository** with a valid opt-in that forbids the forge's CI definition (`.github/**` or `.gitlab-ci.yml`), like the one of `make e9-replay`. Its CI fails when a `ci-red` file is present, so that E10 gets a second round.
 - **Agent configuration repository** ([guide](agent-config.md)) whose `agent.yaml` denies `Bash(make release*)`: that is the barrier of E8.
-- **Stack** from the Compose example with the [`proof.yaml`](../examples/compose/proof.yaml) override, on images that know `--agent-config` (built from `main` until the next release), and a distant `NIGHT_SHIFT_SCHEDULE` such as `0 0 1 1 *`:
+- **Stack** from the Compose example with the [`proof.yaml`](../examples/compose/proof.yaml) override, on images `0.4.0` or later, and a distant `NIGHT_SHIFT_SCHEDULE` such as `0 0 1 1 *`:
 
 ```sh
 cd examples/compose
 NIGHT_SHIFT_REPO=owner/sandbox NIGHT_SHIFT_AGENT_CONFIG=owner/agent-config \
-NIGHT_SHIFT_SCHEDULE="0 0 1 1 *" NIGHT_SHIFT_VERSION=dev \
+NIGHT_SHIFT_SCHEDULE="0 0 1 1 *" \
   docker compose -f compose.yaml -f proof.yaml up -d
 ```
 

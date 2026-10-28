@@ -48,4 +48,4 @@ NIGHT_SHIFT_GITHUB_TOKEN=… ./night-shift select --repo owner/repo --agent-conf
   --state /state --work /work
 ```
 
-With the `CronJob` or the Compose example, add `--agent-config` to the `select` arguments. The option is not in a release yet: it needs images built from `main` (`make images`, tag `dev`) until the next one.
+With the Compose example, set `NIGHT_SHIFT_AGENT_CONFIG=owner/agent-config` in `.env`. With the `CronJob`, add `--agent-config` to the `select` arguments. The option exists from release `0.4.0`.
