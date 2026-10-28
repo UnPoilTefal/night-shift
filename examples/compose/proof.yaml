@@ -1,0 +1,32 @@
+# Surcharge de l'exemple Compose pour rejouer l'épreuve des barrières
+# (night-shift proof replay, docs/proof.md), jamais pour un déploiement. Elle
+# ne retire aucune garantie : elle remplace trois commandes, sans toucher aux
+# réseaux, aux volumes ni aux secrets.
+#
+#   - select lit la configuration de l'agent du dépôt jetable, dont les
+#     refus portent le cas E8 (Bash(make release*)) ;
+#   - les agents sont plafonnés à 5 minutes : le cas E7 (boucle sans fin)
+#     atteint son plafond sans faire attendre l'épreuve une demi-heure.
+#
+# Variables, en plus de celles de compose.yaml :
+#   NIGHT_SHIFT_AGENT_CONFIG  dépôt de la configuration de l'agent (requis)
+#   NIGHT_SHIFT_SCHEDULE      à fixer sur une échéance lointaine, par exemple
+#                             « 0 0 1 1 * » : seules les demandes de
+#                             l'épreuve doivent déclencher une passe.
+# --agent-config exige des images postérieures à la release 0.3.0.
+
+services:
+  select:
+    command: ["night-shift", "select", "--relay", "--control", "http://control:8080", "--round-timeout", "35m",
+              "--forge", "${NIGHT_SHIFT_FORGE:-github}", "--instance", "${NIGHT_SHIFT_INSTANCE:-}",
+              "--repo", "${NIGHT_SHIFT_REPO:?NIGHT_SHIFT_REPO doit nommer le dépôt jetable}",
+              "--agent-config", "${NIGHT_SHIFT_AGENT_CONFIG:?NIGHT_SHIFT_AGENT_CONFIG doit nommer le dépôt de la configuration de l'agent}",
+              "--state", "/state", "--work", "/work", "--next-state", "/state2", "--next-work", "/work2"]
+
+  agent:
+    command: ["night-shift", "agent", "--relay", "--state", "/state", "--work", "/work",
+              "--timeout", "5m", "--auth", "subscription"]
+
+  retry-agent:
+    command: ["night-shift", "agent", "--relay", "--state", "/state2", "--work", "/work2",
+              "--timeout", "5m", "--auth", "subscription"]

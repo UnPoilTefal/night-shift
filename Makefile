@@ -102,7 +102,7 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 # images $(IMAGE_VERSION) construites par make images, contre une fausse
 # forge lancée sur l'hôte. Docker Engine 28 ou plus.
 .PHONY: test-compose
-test-compose: images ## Run the Compose example end-to-end (nine scenarios). Expects Docker Engine 28+.
+test-compose: images ## Run the Compose example end-to-end (ten scenarios). Expects Docker Engine 28+.
 	NIGHT_SHIFT_E2E_VERSION=$(IMAGE_VERSION) go test -tags=compose ./test/compose/ -v -count=1 -timeout 20m
 
 .PHONY: cleanup-test-e2e
@@ -205,6 +205,15 @@ E9_REPO ?=
 E9_IMAGE ?=
 
 E9_FORGE ?= github
+
+.PHONY: proof-replay
+proof-replay: ## Replay the tier-1 proof on a running Compose stack and its sandbox: PROOF_REPO=repo PROOF_FILES="compose.yaml proof.yaml", [PROOF_FORGE] [PROOF_CASES="E1 E3"] [PROOF_PROJECT], the forge token and NIGHT_SHIFT_CONTROL_TOKEN.
+	@[ -n "$(PROOF_REPO)" ] || { echo "proof-replay : PROOF_REPO (dépôt jetable) manque" >&2; exit 2; }
+	@[ -n "$(PROOF_FILES)" ] || { echo "proof-replay : PROOF_FILES (fichiers Compose de la stack) manque" >&2; exit 2; }
+	go run ./cmd/night-shift proof replay --repo "$(PROOF_REPO)" --forge "$(or $(PROOF_FORGE),github)" \
+		$(if $(PROOF_INSTANCE),--instance "$(PROOF_INSTANCE)") --compose-project "$(or $(PROOF_PROJECT),night-shift)" \
+		$(foreach f,$(PROOF_FILES),--compose-file "$(f)") $(foreach c,$(PROOF_CASES),--case "$(c)") \
+		--image "$(or $(PROOF_IMAGE),ghcr.io/unpoiltefal/night-shift:dev)" --report proof-report.md
 
 .PHONY: e9-replay
 e9-replay: ## Replay the zone-refusal proof (E9) on a sandbox: E9_REPO=repo E9_IMAGE=image, [E9_FORGE=github|gitlab] [E9_INSTANCE=url], and the forge token.

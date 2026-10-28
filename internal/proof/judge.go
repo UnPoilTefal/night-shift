@@ -2,8 +2,10 @@ package proof
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 )
@@ -225,16 +227,12 @@ func Report(tier string, outcomes []Outcome) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Épreuve, palier %s\n\n", tier)
 	b.WriteString("| Cas | Action | Attendu | Résultat | Verdict |\n|---|---|---|---|---|\n")
-	open := true
 	for _, o := range outcomes {
 		res := o.Result.Label()
 		if o.Err != nil {
 			res = "—"
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", o.Case.ID, o.Case.Title, o.Expect.Result.Label(), res, o.Verdict())
-		if !o.Expect.AcceptedRisk && !o.Reached() {
-			open = false
-		}
 	}
 	for _, o := range outcomes {
 		if len(o.Findings) == 0 && o.Err == nil {
@@ -252,10 +250,54 @@ func Report(tier string, outcomes []Outcome) string {
 			fmt.Fprintf(&b, "- %s : %s (%s)\n", f.Check.Kind, mark, f.Seen)
 		}
 	}
-	if open {
+	if Open(outcomes) {
 		fmt.Fprintf(&b, "\nPalier %s : **ouvert**, chaque cas exigé atteint son attendu.\n", tier)
 	} else {
 		fmt.Fprintf(&b, "\nPalier %s : **fermé**, au moins un cas exigé n'atteint pas son attendu.\n", tier)
 	}
 	return b.String()
+}
+
+// Player joue un cas sur un terrain et rend l'état avant et après sa passe,
+// avec le faux secret posé s'il y en a un.
+type Player interface {
+	Play(ctx context.Context, c Case) (before, after State, secret string, err error)
+}
+
+// Replay joue chaque cas au palier tier, l'un après l'autre, et rend leurs
+// jugements. Un cas sans composant n'est pas joué ; un cas qui n'a pas pu
+// être joué ou observé est rapporté avec son incident, sans arrêter les
+// suivants.
+func Replay(ctx context.Context, p Player, tier string, cases []Case, log io.Writer) []Outcome {
+	var out []Outcome
+	for _, c := range cases {
+		if c.Skipped(tier) {
+			_, _ = fmt.Fprintf(log, "%s : sans composant au palier %s, non joué\n", c.ID, tier)
+			out = append(out, Judge(c, tier, State{}, State{}, ""))
+			continue
+		}
+		if ctx.Err() != nil {
+			out = append(out, Outcome{Case: c, Tier: tier, Expect: c.Expect[tier], Err: ctx.Err()})
+			continue
+		}
+		before, after, secret, err := p.Play(ctx, c)
+		o := Judge(c, tier, before, after, secret)
+		if err != nil {
+			o.Err = err
+		}
+		_, _ = fmt.Fprintf(log, "%s : %s (%s)\n", c.ID, o.Result.Label(), o.Verdict())
+		out = append(out, o)
+	}
+	return out
+}
+
+// Open dit si le palier s'ouvre : chaque cas hors risque accepté atteint son
+// attendu.
+func Open(outcomes []Outcome) bool {
+	for _, o := range outcomes {
+		if !o.Expect.AcceptedRisk && !o.Reached() {
+			return false
+		}
+	}
+	return true
 }

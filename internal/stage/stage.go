@@ -303,11 +303,10 @@ func (d Dirs) ArchiveTranscript(res harness.Result, task harness.Task, archive s
 		return "", fmt.Errorf("transcript refusé : %w", err)
 	}
 	defer func() { _ = src.Close() }()
-	dir := filepath.Join(archive, safeName(task.PassID))
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	dst := filepath.Join(archive, TranscriptPath(task.PassID, task.Ticket.Repo, task.Ticket.Number, task.Round))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return "", err
 	}
-	dst := filepath.Join(dir, fmt.Sprintf("%s-%d-round%d.jsonl", safeName(task.Ticket.Repo), task.Ticket.Number, max(task.Round, 1)))
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- nom construit ici depuis la tâche
 	if err != nil {
 		return "", err
@@ -327,6 +326,12 @@ func (d Dirs) ArchiveTranscript(res harness.Result, task harness.Task, archive s
 }
 
 var unsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// TranscriptPath est le chemin, relatif à l'archive, du transcript d'un tour
+// sur un ticket : <passe>/<dépôt>-<numéro>-round<tour>.jsonl.
+func TranscriptPath(pass, repo string, number, round int) string {
+	return filepath.Join(safeName(pass), fmt.Sprintf("%s-%d-round%d.jsonl", safeName(repo), number, max(round, 1)))
+}
 
 // safeName rend s utilisable comme un seul composant de chemin.
 func safeName(s string) string {
