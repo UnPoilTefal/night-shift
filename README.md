@@ -116,6 +116,7 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Outcomes and weekly digest: `night-shift weekly` reads each ticket's outcome on the forge, reports the delegation rate and flags the trust-level criterion, on GitHub and GitLab ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 - [x] Docker Compose example (solo tier, no cluster): the same steps of the same binary on a single Docker host, with an embedded egress proxy and a static test of every guarantee ([#110](https://github.com/UnPoilTefal/night-shift/issues/110), [guide](docs/compose.md), [ADR 0013](docs/adr/0013-exemple-compose-second-systeme-d-execution.md))
 - [x] End-to-end test of the Compose example in CI: the real stack against a fake GitLab, in nine scenarios, from a full pass to a hostile agent ([#111](https://github.com/UnPoilTefal/night-shift/issues/111))
+- [x] No CI triggered on the draft PR: after `--ci-grace` with no check or status, the pass stops waiting and flags it apart from an unsettled CI ([#135](https://github.com/UnPoilTefal/night-shift/issues/135))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
 
@@ -159,6 +160,7 @@ CLAUDE_CODE_OAUTH_TOKEN=… ./night-shift agent --state /state --work /work --ti
 #    check each commit against the base branch's opt-in (a forbidden zone: nothing is pushed),
 #    push it, open a draft PR and wait for its CI (--ci-timeout, 10m by default). The verdict waits
 #    until every check has stayed completed for --ci-settle (1m), so a slow workflow is not missed.
+#    If no check or status shows up within --ci-grace (2m), it stops waiting and reports "no CI triggered".
 #    Green: hand the ticket back in an explicit state, then publish the digest.
 #    Red: prepare the retry in /state2 and /work2 instead (fresh clone of the branch, failing checks).
 #    NIGHT_SHIFT_DISCORD_WEBHOOK is optional. --transcripts archives the round's transcript (see below).
@@ -204,6 +206,7 @@ The forge token needs read and write access to contents, pull requests and issue
 |---|---|
 | Commits, CI green (first or second round) | Linked to a **draft** PR, commit messages kept, `Night-Shift-Agent` and `Night-Shift-Pass` trailers added; no lifecycle label left |
 | Commits, CI not settled before `--ci-timeout` | Same, with a mention of the checks still running |
+| Commits, no check or status within `--ci-grace` | Same, flagged **no CI triggered**: nothing verified the change. The wait stops there instead of running to `--ci-timeout` |
 | Commits, CI still red after the second round | `ready-for-human`; the PR stays a draft, with a comment that sums up the failing checks |
 | A commit touches a forbidden zone (either round) | **Zone refusal**: nothing is pushed, `ready-for-human` with the commit, path and zone. In the second round, the draft stays as the first round published it, with a comment |
 | Commits touch a sensitive zone | Pushed as usual; the PR names the paths and gets the `sensitive-zone` label |

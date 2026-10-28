@@ -53,6 +53,9 @@ type CIWait struct {
 	// terminés avant le verdict : juste après un push, un workflow lent peut
 	// ne pas être encore enregistré quand un check rapide a déjà conclu.
 	Settle time.Duration
+	// Grace est le délai au bout duquel un commit sans aucun check ni
+	// statut est jugé sans CI : l'attente s'arrête sans aller à l'échéance.
+	Grace time.Duration
 }
 
 // Attente de la CI par défaut.
@@ -60,11 +63,13 @@ const (
 	DefaultCITimeout = 10 * time.Minute
 	DefaultCIPoll    = 30 * time.Second
 	DefaultCISettle  = time.Minute
+	DefaultCIGrace   = 2 * time.Minute
 )
 
 func (w CIWait) timeout() time.Duration { return cmp.Or(w.Timeout, DefaultCITimeout) }
 func (w CIWait) poll() time.Duration    { return cmp.Or(w.Poll, DefaultCIPoll) }
 func (w CIWait) settle() time.Duration  { return cmp.Or(w.Settle, DefaultCISettle) }
+func (w CIWait) grace() time.Duration   { return cmp.Or(w.Grace, DefaultCIGrace) }
 
 // CIFailed est l'issue d'un ticket dont la CI échoue encore au dernier tour
 // permis : la PR reste en brouillon et le ticket revient à un humain. Seule
@@ -411,11 +416,15 @@ func Follow(ctx context.Context, cfg Config, code forge.CodeForge, p Publisher, 
 		return done(res)
 	}
 
-	checks, settled, err := waitCI(ctx, cfg.CI, code, task.TargetRepo, pub.Head)
+	checks, verdict, err := waitCI(ctx, cfg.CI, code, task.TargetRepo, pub.Head)
 	failed := filter(checks, forge.CheckFailed)
 	switch {
-	case len(failed) == 0 && settled:
+	case verdict == ciSettled && len(failed) == 0:
 		res.Reason = fmt.Sprintf("CI verte au tour %d.\n\n%s", round(task), res.Reason)
+		return done(res)
+	case verdict == ciAbsent:
+		res.Reason = fmt.Sprintf("Aucune CI déclenchée : ni check ni statut sur la PR au bout de %s, rien n'a vérifié le changement ; à vérifier sur la PR.\n\n%s",
+			min(cfg.CI.grace(), cfg.CI.timeout()), res.Reason)
 		return done(res)
 	case len(failed) == 0:
 		why := fmt.Sprintf("CI non conclue au bout de %s", cfg.CI.timeout())
@@ -445,34 +454,55 @@ func Follow(ctx context.Context, cfg Config, code forge.CodeForge, p Publisher, 
 	return red
 }
 
+// ciVerdict est la conclusion de l'attente de la CI d'un commit.
+type ciVerdict int
+
+const (
+	// ciUnsettled : l'échéance est arrivée avant que les checks concluent.
+	ciUnsettled ciVerdict = iota
+	// ciSettled : tous les checks sont terminés depuis CIWait.Settle.
+	ciSettled
+	// ciAbsent : aucun check ni statut n'est apparu pendant CIWait.Grace.
+	ciAbsent
+)
+
 // waitCI lit les checks du commit sha jusqu'à ce qu'ils soient tous
-// terminés depuis w.Settle, ou jusqu'à l'échéance. settled dit si c'est le
-// cas ; err est la dernière erreur de lecture, s'il n'y a eu aucune lecture
-// réussie depuis.
-func waitCI(ctx context.Context, w CIWait, code forge.CodeForge, repo, sha string) (checks []forge.Check, settled bool, err error) {
+// terminés depuis w.Settle, jusqu'à w.Grace si aucun n'apparaît, ou jusqu'à
+// l'échéance. err est la dernière erreur de lecture, s'il n'y a eu aucune
+// lecture réussie depuis ; une lecture en échec ne prouve pas l'absence de
+// CI.
+func waitCI(ctx context.Context, w CIWait, code forge.CodeForge, repo, sha string) (checks []forge.Check, verdict ciVerdict, err error) {
 	wctx, cancel := context.WithTimeout(ctx, w.timeout())
 	defer cancel()
 	tick := time.NewTicker(w.poll())
 	defer tick.Stop()
+	start := time.Now()
 	var since time.Time
+	seen := false
 	for {
 		cs, cerr := code.Checks(wctx, repo, sha)
 		if cerr == nil {
 			checks, err = cs, nil
+			seen = seen || len(cs) > 0
 			switch {
+			case !seen && time.Since(start) >= w.grace():
+				return checks, ciAbsent, nil
 			case len(cs) == 0 || len(filter(cs, forge.CheckPending)) > 0:
 				since = time.Time{}
 			case since.IsZero():
 				since = time.Now()
 			case time.Since(since) >= w.settle():
-				return checks, true, nil
+				return checks, ciSettled, nil
 			}
 		} else if wctx.Err() == nil {
 			err = cerr
 		}
 		select {
 		case <-wctx.Done():
-			return checks, false, err
+			if !seen && err == nil && ctx.Err() == nil {
+				return checks, ciAbsent, nil
+			}
+			return checks, ciUnsettled, err
 		case <-tick.C:
 		}
 	}

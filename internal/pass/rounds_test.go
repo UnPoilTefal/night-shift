@@ -2,6 +2,7 @@ package pass_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -188,6 +189,84 @@ func TestUnsettledCIAtDeadlineLeavesTheDraftForReview(t *testing.T) {
 	}
 	if c := lastComment(f.Issue("o/a", 7)); !strings.Contains(c, "CI non conclue") || !strings.Contains(c, "e2e") {
 		t.Fatalf("commentaire final = %q, attendu la CI non conclue et le check en cours", c)
+	}
+}
+
+func TestNoCheckDuringGraceStopsWaitingAndSaysNoCI(t *testing.T) {
+	f := ciForge()
+	h := &roundsHarness{results: []harness.Result{commits(0.5)}}
+	p := &forgePublisher{f: f}
+	start := time.Now()
+
+	r, err := pass.Run(context.Background(), pass.Config{
+		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
+		CI: pass.CIWait{Poll: time.Millisecond, Timeout: time.Minute, Settle: time.Millisecond, Grace: 10 * time.Millisecond},
+	}, f, f, h, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if d := time.Since(start); d > 30*time.Second {
+		t.Fatalf("passe en %s : l'attente est allée à l'échéance malgré l'absence de CI", d)
+	}
+	if len(h.tasks) != 1 || r.Tickets[0].Outcome != harness.Succeeded {
+		t.Fatalf("tours = %d, issue = %s ; attendu la PR à relire sans relance", len(h.tasks), r.Tickets[0].Outcome)
+	}
+	c := lastComment(f.Issue("o/a", 7))
+	if !strings.Contains(c, "Aucune CI déclenchée") || strings.Contains(c, "CI non conclue") {
+		t.Fatalf("commentaire final = %q, attendu « Aucune CI déclenchée »", c)
+	}
+}
+
+func TestCheckAppearingWithinGraceIsFollowedToItsVerdict(t *testing.T) {
+	f := ciForge()
+	f.SetChecks("o/a", "head-2", green)
+	reads := 0
+	f.Fail = func(op string) error {
+		if op == "Checks" {
+			if reads++; reads == 3 {
+				f.SetChecks("o/a", "head-1", red)
+			}
+		}
+		return nil
+	}
+	h := &roundsHarness{results: []harness.Result{commits(0.5), commits(0.25)}}
+	p := &forgePublisher{f: f}
+
+	_, err := pass.Run(context.Background(), pass.Config{
+		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
+		CI: pass.CIWait{Poll: time.Millisecond, Timeout: time.Minute, Settle: 5 * time.Millisecond, Grace: time.Minute},
+	}, f, f, h, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(h.tasks) != 2 {
+		t.Fatalf("l'agent a tourné %d fois : le check apparu pendant la grâce n'a pas été suivi", len(h.tasks))
+	}
+}
+
+func TestReadErrorsNeverCountAsNoCI(t *testing.T) {
+	f := ciForge()
+	f.Fail = func(op string) error {
+		if op == "Checks" {
+			return errors.New("forge indisponible")
+		}
+		return nil
+	}
+	h := &roundsHarness{results: []harness.Result{commits(0.5)}}
+	p := &forgePublisher{f: f}
+
+	_, err := pass.Run(context.Background(), pass.Config{
+		Repos: []string{"o/a"}, MaxTickets: 1, ID: "pass-test", Now: func() time.Time { return now },
+		CI: pass.CIWait{Poll: time.Millisecond, Timeout: 50 * time.Millisecond, Settle: time.Millisecond, Grace: time.Millisecond},
+	}, f, f, h, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c := lastComment(f.Issue("o/a", 7)); !strings.Contains(c, "CI non conclue") || !strings.Contains(c, "forge indisponible") {
+		t.Fatalf("commentaire final = %q, attendu la CI non conclue et l'erreur de lecture", c)
 	}
 }
 

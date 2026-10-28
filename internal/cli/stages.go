@@ -248,12 +248,13 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	ciTimeout := fs.Duration("ci-timeout", pass.DefaultCITimeout, "durée maximale de l'attente de la CI de la PR")
 	ciPoll := fs.Duration("ci-poll", pass.DefaultCIPoll, "intervalle entre deux lectures de la CI")
 	ciSettle := fs.Duration("ci-settle", pass.DefaultCISettle, "durée pendant laquelle tous les checks doivent rester terminés avant le verdict")
+	ciGrace := fs.Duration("ci-grace", pass.DefaultCIGrace, "délai au bout duquel une PR sans aucun check ni statut est rapportée sans CI")
 	ff := addForgeFlags(fs, true)
 	rf := addRelayFlags(fs, true)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if d.State == "" || d.Work == "" || (next.State == "") != (next.Work == "") || *ciTimeout <= 0 || *ciPoll <= 0 || *ciSettle <= 0 {
+	if d.State == "" || d.Work == "" || (next.State == "") != (next.Work == "") || *ciTimeout <= 0 || *ciPoll <= 0 || *ciSettle <= 0 || *ciGrace <= 0 {
 		_, _ = fmt.Fprintln(stderr, "publish : --state et --work sont requis, --next-state et --next-work vont ensemble, et les durées de CI sont positives")
 		return 2
 	}
@@ -270,7 +271,7 @@ func runPublish(args []string, stdout, stderr io.Writer) int {
 	}
 	o := publishOpts{
 		f: f, token: token, hook: hook, forge: ff.name, next: next, transcripts: *transcripts, followUp: *followUp,
-		ci: pass.CIWait{Timeout: *ciTimeout, Poll: *ciPoll, Settle: *ciSettle}, relay: rf.on, roundTimeout: rf.roundTimeout,
+		ci: pass.CIWait{Timeout: *ciTimeout, Poll: *ciPoll, Settle: *ciSettle, Grace: *ciGrace}, relay: rf.on, roundTimeout: rf.roundTimeout,
 	}
 	ctx, stop := stageContext()
 	defer stop()
