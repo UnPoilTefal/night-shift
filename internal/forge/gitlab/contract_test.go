@@ -32,6 +32,7 @@ func newFixture(t *testing.T) *fixture {
 
 func (f *fixture) Tickets() forge.TicketSource { return f.client }
 func (f *fixture) Code() forge.CodeForge       { return f.client }
+func (f *fixture) Sandbox() forge.Sandbox      { return f.client }
 
 func (f *fixture) AddTicket(t forge.Ticket, closed bool) {
 	i := gitlabtest.Issue{
@@ -85,7 +86,7 @@ func (f *fixture) SetChange(repo string, number int, state forge.ChangeRequestSt
 
 func (f *fixture) Ticket(repo string, number int) forgetest.Ticket {
 	i := f.srv.Issue(repo, number)
-	return forgetest.Ticket{Title: i.Title, Body: i.Description, Labels: i.Labels, Comments: bodies(i.Notes)}
+	return forgetest.Ticket{Title: i.Title, Body: i.Description, Labels: i.Labels, Comments: bodies(i.Notes), Closed: i.Closed}
 }
 
 func (f *fixture) ChangeRequest(repo string, number int) forgetest.ChangeRequest {
@@ -98,6 +99,7 @@ func (f *fixture) ChangeRequest(repo string, number int) forgetest.ChangeRequest
 				},
 				Draft:    m.Draft(),
 				Comments: bodies(m.Notes),
+				Closed:   m.State == "closed",
 			}
 		}
 	}

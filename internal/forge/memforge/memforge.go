@@ -242,6 +242,55 @@ func (f *Forge) UpdatedTickets(ctx context.Context, repo string, since time.Time
 	return ts, nil
 }
 
+// Ticket implémente forge.Sandbox.
+func (f *Forge) Ticket(ctx context.Context, repo string, number int) (forge.Ticket, error) {
+	if err := f.hook(ctx, "Ticket"); err != nil {
+		return forge.Ticket{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := f.find(repo, number)
+	if i == nil {
+		return forge.Ticket{}, fmt.Errorf("memforge : ticket %s#%d inconnu", repo, number)
+	}
+	t := i.Ticket
+	t.Labels = slices.Clone(i.Labels)
+	t.Comments = append(slices.Clone(i.Ticket.Comments), i.posted...)
+	return t, nil
+}
+
+// CloseTicket implémente forge.Sandbox.
+func (f *Forge) CloseTicket(ctx context.Context, repo string, number int) error {
+	if err := f.hook(ctx, "CloseTicket"); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := f.find(repo, number)
+	if i == nil {
+		return fmt.Errorf("memforge : ticket %s#%d inconnu", repo, number)
+	}
+	i.Closed, i.updated = true, f.now()
+	return nil
+}
+
+// CloseChangeRequest implémente forge.Sandbox.
+func (f *Forge) CloseChangeRequest(ctx context.Context, repo string, number int) error {
+	if err := f.hook(ctx, "CloseChangeRequest"); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.findChange(repo, number)
+	if c == nil {
+		return fmt.Errorf("memforge : demande de changement %s#%d inconnue", repo, number)
+	}
+	if c.State != forge.ChangeMerged {
+		c.State, c.ClosedAt = forge.ChangeClosed, f.now()
+	}
+	return nil
+}
+
 // PutIssue implémente forge.TicketSource.
 func (f *Forge) PutIssue(ctx context.Context, repo, label, title, body string) (int, string, error) {
 	if err := f.hook(ctx, "PutIssue"); err != nil {

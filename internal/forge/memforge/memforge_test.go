@@ -18,6 +18,7 @@ type fixture struct{ *memforge.Forge }
 
 func (f fixture) Tickets() forge.TicketSource { return f.Forge }
 func (f fixture) Code() forge.CodeForge       { return f.Forge }
+func (f fixture) Sandbox() forge.Sandbox      { return f.Forge }
 
 func (f fixture) AddTicket(t forge.Ticket, closed bool) {
 	f.AddIssue(t)
@@ -32,10 +33,10 @@ func (f fixture) Ticket(repo string, number int) forgetest.Ticket {
 	for _, c := range i.Ticket.Comments {
 		comments = append(comments, c.Body)
 	}
-	return forgetest.Ticket{Title: i.Title, Body: i.Body, Labels: i.Labels, Comments: append(comments, i.Comments...)}
+	return forgetest.Ticket{Title: i.Title, Body: i.Body, Labels: i.Labels, Comments: append(comments, i.Comments...), Closed: i.Closed}
 }
 
 func (f fixture) ChangeRequest(repo string, number int) forgetest.ChangeRequest {
 	c := f.Change(repo, number)
-	return forgetest.ChangeRequest{ChangeRequest: c.ChangeRequest, Draft: true, Comments: slices.Clone(c.Comments)}
+	return forgetest.ChangeRequest{ChangeRequest: c.ChangeRequest, Draft: true, Comments: slices.Clone(c.Comments), Closed: c.State == forge.ChangeClosed}
 }

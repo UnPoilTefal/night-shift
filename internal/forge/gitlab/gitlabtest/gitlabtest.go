@@ -476,6 +476,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			if d, ok := body["description"].(string); ok {
 				i.Description = d
 			}
+			if str("state_event") == "close" {
+				i.Closed = true
+			}
 			i.UpdatedAt = time.Now()
 		}
 		writeJSON(w, s.issueJSON(repo, i))
@@ -609,6 +612,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		if m == nil {
 			notFound(w)
 			return
+		}
+		if str("state_event") == "close" && m.State != "merged" {
+			m.State, m.ClosedAt = "closed", time.Now()
 		}
 		if s.relabel(w, p, &m.Labels, str("add_labels"), str("remove_labels")) {
 			writeJSON(w, map[string]any{"iid": m.IID, "labels": m.Labels})

@@ -21,6 +21,7 @@ import (
 type Fixture interface {
 	Tickets() forge.TicketSource
 	Code() forge.CodeForge
+	Sandbox() forge.Sandbox
 
 	// AddTicket ajoute un ticket, avec ses labels et ses commentaires, sur
 	// son dépôt ; closed le ferme.
@@ -48,6 +49,7 @@ type Ticket struct {
 	Labels      []string
 	// Comments sont tous les commentaires, du plus ancien au plus récent.
 	Comments []string
+	Closed   bool
 }
 
 // ChangeRequest est l'état d'une demande de changement vu par une Fixture.
@@ -55,6 +57,7 @@ type ChangeRequest struct {
 	forge.ChangeRequest
 	Draft    bool
 	Comments []string
+	Closed   bool
 }
 
 // Run joue chaque scénario sur une Fixture neuve.
@@ -75,6 +78,7 @@ func Run(t *testing.T, newFixture func(t *testing.T) Fixture) {
 		{"UpdatedTicketsListsOpenAndClosedTicketsTouchedSince", updatedTickets},
 		{"PutIssueOpensThenUpdatesTheSameIssue", putIssue},
 		{"AgentChangeRequestsGiveStateAndCommits", agentChangeRequests},
+		{"SandboxReadsAndClosesTicketsAndChangeRequests", sandbox},
 	} {
 		t.Run(s.name, func(t *testing.T) { s.run(t, newFixture(t)) })
 	}
@@ -389,6 +393,60 @@ func agentChangeRequests(t *testing.T, f Fixture) {
 	}
 	if msgs, err := code.ChangeRequestCommits(ctx, "o/a", merged); err != nil || !slices.Equal(msgs, commits) {
 		t.Fatalf("commits = %q, %v\nattendu %q", msgs, err, commits)
+	}
+}
+
+func sandbox(t *testing.T, f Fixture) {
+	ctx := context.Background()
+	n, _, err := f.Tickets().CreateIssue(ctx, "o/a", "Cas E2", "Le corps à garder.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Tickets().AddLabel(ctx, "o/a", n, forge.LabelReady); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Tickets().Comment(ctx, "o/a", n, "night-shift : refus de zone"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.Sandbox().Ticket(ctx, "o/a", n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Number != n || got.Title != "Cas E2" || got.Body != "Le corps à garder." || !slices.Contains(got.Labels, forge.LabelReady) {
+		t.Fatalf("ticket relu = %+v", got)
+	}
+	if len(got.Comments) != 1 || got.Comments[0].Body != "night-shift : refus de zone" {
+		t.Fatalf("commentaires relus = %+v", got.Comments)
+	}
+
+	for range 2 {
+		if err := f.Sandbox().CloseTicket(ctx, "o/a", n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !f.Ticket("o/a", n).Closed {
+		t.Fatal("ticket toujours ouvert")
+	}
+	if got, err := f.Sandbox().Ticket(ctx, "o/a", n); err != nil || got.Body != "Le corps à garder." {
+		t.Fatalf("ticket fermé relu = %+v, %v", got, err)
+	}
+
+	cr, _, err := f.Code().OpenChangeRequest(ctx, "o/a", forge.ChangeRequest{Head: "proof/e3", Base: "main", Title: "Cas E3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := f.Sandbox().CloseChangeRequest(ctx, "o/a", cr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !f.ChangeRequest("o/a", cr).Closed {
+		t.Fatal("demande de changement toujours ouverte")
+	}
+
+	if _, err := f.Sandbox().Ticket(ctx, "o/a", 999); err == nil {
+		t.Fatal("ticket inconnu relu sans erreur")
 	}
 }
 
