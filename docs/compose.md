@@ -19,7 +19,7 @@ An end-to-end test ([`test/compose`](../test/compose/compose_test.go), `make tes
 
 - **Linux**: Docker Engine **28 or later**, with Compose v2. Engine 28 is the first version that can isolate the agents' network from the host (`gateway_mode_ipv4: isolated`).
 - **Docker Desktop**: fine for trying the stack, not for running it for real. See [Docker Desktop](#docker-desktop).
-- **Images**: relay mode and `control` ship from release `0.3.0`, the agent configuration from `0.4.0`, the stack's default. To try `main`, build the images with `make images`, which tags them `dev`, and set `NIGHT_SHIFT_VERSION=dev`.
+- **Images**: relay mode and `control` ship from release `0.3.0`, the agent configuration from `0.4.0`; the stack defaults to `0.5.0`. To try `main`, build the images with `make images`, which tags them `dev`, and set `NIGHT_SHIFT_VERSION=dev`.
 
 ## Layout
 
@@ -55,7 +55,7 @@ Compose reads these variables from the environment or from a `.env` file next to
 | `NIGHT_SHIFT_INSTANCE` | empty | Base address of a dedicated or self-managed instance, for example `https://gitlab.example.com`. Leave it empty for github.com or gitlab.com |
 | `NIGHT_SHIFT_AGENT_CONFIG` | empty | Repository of the [agent configuration](agent-config.md) (added refusals, skills), read by `select` at its last merged revision. Empty: the agent gets the fixed refusals and the image's skills only |
 | `NIGHT_SHIFT_SCHEDULE` | `0 2 * * *` | Cron schedule of the passes, in UTC |
-| `NIGHT_SHIFT_VERSION` | `0.4.0` | Tag of the `night-shift` and `night-shift-go` images |
+| `NIGHT_SHIFT_VERSION` | `0.5.0` | Tag of the `night-shift` and `night-shift-go` images |
 | `NIGHT_SHIFT_SECRETS_DIR` | `./secrets` | Directory of the secret files |
 | `NIGHT_SHIFT_ADMIN_PORT` | `8081` | Port of the administration API on the host's `127.0.0.1` |
 
