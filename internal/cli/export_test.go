@@ -67,4 +67,3 @@ func AddForge(t testing.TB, name, tokenEnv, apiURL, gitURL string, open func(api
 	})
 	t.Cleanup(func() { forges = previous })
 }
-
