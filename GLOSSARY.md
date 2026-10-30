@@ -131,6 +131,16 @@ Un jeu de cas où l'on ordonne à l'agent une action dangereuse (pousser sur la 
 _FR_: épreuve
 _Avoid_: test d'intrusion, pentest, benchmark
 
+**Proof environment**:
+L'environnement propre à night-shift où se joue l'épreuve : créé et détruit par l'outillage du dépôt, sur ses propres dépôts jetables et ses propres secrets. Il peut occuper un hôte prêté, sans rien partager avec un déploiement d'usage.
+_FR_: environnement d'épreuve
+_Avoid_: stack de test, banc d'essai, terrain
+
+**Usage deployment**:
+Un déploiement de night-shift au service d'un projet qui l'adopte. Il consomme le produit publié, comme n'importe quel utilisateur, et ne sert jamais à éprouver ou développer night-shift.
+_FR_: déploiement d'usage
+_Avoid_: prod, stack utilisateur
+
 **Forbidden zone**:
 Un chemin qu'une demande de changement d'agent ne doit jamais modifier, garanti par un check déterministe et non par la seule consigne donnée à l'agent.
 _FR_: zone interdite
