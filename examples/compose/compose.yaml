@@ -30,7 +30,7 @@
 #   NIGHT_SHIFT_AGENT_CONFIG dépôt de la configuration de l'agent (optionnel,
 #                            docs/agent-config.md) ; vide : aucune
 #   NIGHT_SHIFT_SCHEDULE     échéance cron des passes (défaut 0 2 * * *, UTC)
-#   NIGHT_SHIFT_VERSION      étiquette des images (défaut 0.4.0 ; dev pour
+#   NIGHT_SHIFT_VERSION      étiquette des images (défaut 0.5.0 ; dev pour
 #                            celles de make images)
 #   NIGHT_SHIFT_SECRETS_DIR  dossier des secrets (défaut ./secrets)
 #   NIGHT_SHIFT_ADMIN_PORT   port de l'API d'administration sur 127.0.0.1 de
@@ -93,7 +93,7 @@ x-agent-tmpfs: &agentTmpfs
 
 services:
   control:
-    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-0.4.0}
+    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-0.5.0}
     command: ["night-shift", "control", "serve",
               "--schedule", "${NIGHT_SHIFT_SCHEDULE:-0 2 * * *}",
               "--listen", ":8080", "--admin-listen", ":8081",
@@ -122,7 +122,7 @@ services:
     logging: *logging
 
   select:
-    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-0.4.0}
+    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-0.5.0}
     command: ["night-shift", "select", "--relay", "--control", "http://control:8080", "--round-timeout", "35m",
               "--forge", "${NIGHT_SHIFT_FORGE:-github}", "--instance", "${NIGHT_SHIFT_INSTANCE:-}",
               "--repo", "${NIGHT_SHIFT_REPO:?NIGHT_SHIFT_REPO doit nommer le dépôt candidat}",
@@ -147,7 +147,7 @@ services:
   agent:
     # Image d'outils du dépôt cible : night-shift, claude, git et la chaîne
     # de build (ici Go).
-    image: ghcr.io/unpoiltefal/night-shift-go:${NIGHT_SHIFT_VERSION:-0.4.0}
+    image: ghcr.io/unpoiltefal/night-shift-go:${NIGHT_SHIFT_VERSION:-0.5.0}
     command: ["night-shift", "agent", "--relay", "--state", "/state", "--work", "/work",
               "--timeout", "30m", "--auth", "subscription"]
     restart: unless-stopped
@@ -171,7 +171,7 @@ services:
     logging: *logging
 
   publish:
-    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-0.4.0}
+    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-0.5.0}
     command: ["night-shift", "publish", "--relay", "--control", "http://control:8080", "--round-timeout", "35m",
               "--forge", "${NIGHT_SHIFT_FORGE:-github}", "--instance", "${NIGHT_SHIFT_INSTANCE:-}",
               "--state", "/state", "--work", "/work", "--ci-timeout", "10m",
@@ -194,7 +194,7 @@ services:
     logging: *logging
 
   retry-agent:
-    image: ghcr.io/unpoiltefal/night-shift-go:${NIGHT_SHIFT_VERSION:-0.4.0}
+    image: ghcr.io/unpoiltefal/night-shift-go:${NIGHT_SHIFT_VERSION:-0.5.0}
     command: ["night-shift", "agent", "--relay", "--state", "/state2", "--work", "/work2",
               "--timeout", "30m", "--auth", "subscription"]
     restart: unless-stopped
@@ -215,7 +215,7 @@ services:
     logging: *logging
 
   retry-publish:
-    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-0.4.0}
+    image: ghcr.io/unpoiltefal/night-shift:${NIGHT_SHIFT_VERSION:-0.5.0}
     command: ["night-shift", "publish", "--relay", "--follow-up", "--control", "http://control:8080", "--round-timeout", "35m",
               "--forge", "${NIGHT_SHIFT_FORGE:-github}", "--instance", "${NIGHT_SHIFT_INSTANCE:-}",
               "--state", "/state2", "--work", "/work2", "--ci-timeout", "10m", "--transcripts", "/transcripts"]

@@ -293,7 +293,7 @@ Two images, built from [`images/`](images/) with [`docker-bake.hcl`](docker-bake
 - Renovate tracks the base images, Claude Code, `gh` and the skills.
 
 ```sh
-docker run --rm ghcr.io/unpoiltefal/night-shift-go:0.4.0 night-shift version
+docker run --rm ghcr.io/unpoiltefal/night-shift-go:0.5.0 night-shift version
 make images test-images scan-images          # or build them locally, tagged dev
 ```
 
