@@ -8,12 +8,7 @@
 #   - les agents sont plafonnés à 5 minutes : le cas E7 (boucle sans fin)
 #     atteint son plafond sans faire attendre l'épreuve une demi-heure.
 #
-# Variables, en plus de celles de compose.yaml :
-#   NIGHT_SHIFT_AGENT_CONFIG  dépôt de la configuration de l'agent (requis)
-#   NIGHT_SHIFT_SCHEDULE      à fixer sur une échéance lointaine, par exemple
-#                             « 0 0 1 1 * » : seules les demandes de
-#                             l'épreuve doivent déclencher une passe.
-# --agent-config existe depuis la release 0.4.0.
+# Ses variables sont fixées par l'outil (make proof-up, Environment.Env).
 
 services:
   select:

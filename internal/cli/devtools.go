@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"io"
+	"os"
 )
 
 // Ce fichier expose aux outils de développement (ADR 0014) la lecture des
@@ -26,6 +27,22 @@ func (ff ForgeFlags) Open(cmd string, stderr io.Writer, repos ...string) (Forge,
 
 // Name rend le nom de la forge choisie.
 func (ff ForgeFlags) Name() string { return ff.flags.name }
+
+// Instance rend l'adresse de l'instance choisie, vide pour la forge publique.
+func (ff ForgeFlags) Instance() string { return ff.flags.instance }
+
+// UseTokenFile fait lire le jeton de la forge choisie dans ce fichier,
+// quoi que porte l'environnement de l'appelant.
+func (ff ForgeFlags) UseTokenFile(path string) error {
+	a, err := lookupForge(ff.flags.name)
+	if err != nil {
+		return err
+	}
+	if err := os.Unsetenv(a.tokenEnv); err != nil {
+		return err
+	}
+	return os.Setenv(a.tokenEnv+FileSuffix, path)
+}
 
 // SecretEnv rend le secret de la variable name, lu dans name ou dans le
 // fichier que nomme name_FILE.

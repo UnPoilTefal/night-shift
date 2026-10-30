@@ -32,6 +32,7 @@ import (
 	"github.com/UnPoilTefal/night-shift/internal/pass"
 	"github.com/UnPoilTefal/night-shift/internal/proof"
 	pstack "github.com/UnPoilTefal/night-shift/internal/proof/stack"
+	"github.com/UnPoilTefal/night-shift/internal/proofcli"
 	"github.com/UnPoilTefal/night-shift/internal/relay"
 	"github.com/UnPoilTefal/night-shift/internal/testgit"
 )
@@ -102,6 +103,7 @@ func TestComposeStack(t *testing.T) {
 	scenario("8 regroupement", s.coalescing)
 	scenario("9 transcripts", s.transcripts)
 	scenario("10 épreuve", s.proof)
+	scenario("11 environnement d'épreuve", s.proofEnvironment)
 }
 
 // proofModes choisit le comportement du faux agent pour chaque cas de
@@ -160,6 +162,59 @@ func (s *stack) proof(t *testing.T) {
 		if m.State == "opened" && strings.Contains(m.Title, "épreuve") {
 			t.Errorf("demande de changement de l'épreuve restée ouverte : !%d", m.IID)
 		}
+	}
+}
+
+// proofEnvironment lance et détruit l'environnement d'épreuve à côté de la
+// stack de test, qui tient lieu de déploiement d'usage : celle-ci n'en voit
+// rien, et il ne laisse rien.
+func (s *stack) proofEnvironment(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := proofcli.Environment{Root: root, Secrets: s.secretsDir, Repo: repo, AgentConfig: "night/agent-config",
+		Forge: "gitlab", Instance: "http://forge.test:" + s.port, Version: e2eTag, AdminPort: proofcli.DefaultAdminPort}
+	usage := func() string {
+		containers := s.compose("ps", "--all", "--quiet")
+		volumes := mustRun(t, "", nil, "docker", "volume", "ls", "--quiet", "--filter", "label=com.docker.compose.project="+project)
+		return containers + volumes
+	}
+	leftovers := func() string {
+		label := "label=com.docker.compose.project=" + proofcli.Project
+		return strings.TrimSpace(mustRun(t, "", nil, "docker", "ps", "--all", "--quiet", "--filter", label) +
+			mustRun(t, "", nil, "docker", "volume", "ls", "--quiet", "--filter", label) +
+			mustRun(t, "", nil, "docker", "network", "ls", "--quiet", "--filter", label))
+	}
+	before := usage()
+	var log bytes.Buffer
+	ctx := context.Background()
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("déroulé :\n%s", log.String())
+		}
+		_ = e.Down(ctx, &log)
+	})
+	if err := e.Up(ctx, controlToken, &log); err != nil {
+		t.Fatal(err)
+	}
+	if leftovers() == "" {
+		t.Fatal("l'environnement d'épreuve n'a rien lancé")
+	}
+	if _, err := s.admin("/status"); err != nil {
+		t.Fatalf("la stack d'usage ne répond plus : %v", err)
+	}
+	if err := e.Down(ctx, &log); err != nil {
+		t.Fatal(err)
+	}
+	if left := leftovers(); left != "" {
+		t.Fatalf("restes de l'environnement d'épreuve : %s", left)
+	}
+	if after := usage(); after != before {
+		t.Fatalf("la stack d'usage a changé :\navant : %s\naprès : %s", before, after)
+	}
+	if _, err := s.admin("/status"); err != nil {
+		t.Fatalf("la stack d'usage ne répond plus : %v", err)
 	}
 }
 

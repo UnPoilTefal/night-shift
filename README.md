@@ -117,12 +117,13 @@ Status: **a pass runs a real headless `claude -p` agent on a brief built from tr
 - [x] Control service v1: scheduled and manual passes one at a time, watchdog, host-only history behind a read-only API ([#109](https://github.com/UnPoilTefal/night-shift/issues/109), [docs](docs/control.md))
 - [x] Outcomes and weekly digest: `night-shift weekly` reads each ticket's outcome on the forge, reports the delegation rate and flags the trust-level criterion, on GitHub and GitLab ([#10](https://github.com/UnPoilTefal/night-shift/issues/10))
 - [x] Docker Compose example (solo tier, no cluster): the same steps of the same binary on a single Docker host, with an embedded egress proxy and a static test of every guarantee ([#110](https://github.com/UnPoilTefal/night-shift/issues/110), [guide](docs/compose.md), [ADR 0013](docs/adr/0013-exemple-compose-second-systeme-d-execution.md))
-- [x] End-to-end test of the Compose example in CI: the real stack against a fake GitLab, in ten scenarios, from a full pass to a hostile agent and the barrier proof ([#111](https://github.com/UnPoilTefal/night-shift/issues/111))
+- [x] End-to-end test of the Compose example in CI: the real stack against a fake GitLab, in eleven scenarios, from a full pass to a hostile agent and the barrier proof ([#111](https://github.com/UnPoilTefal/night-shift/issues/111))
 - [x] No CI triggered on the draft PR: after `--ci-grace` with no check or status, the pass stops waiting and flags it apart from an unsettled CI ([#135](https://github.com/UnPoilTefal/night-shift/issues/135))
 - [x] Verdict journal: the decisions of the barriers on the agent's actions, written by the trusted steps next to the transcripts, counted per ticket in the pass report and on the PR, never verbatim ([#131](https://github.com/UnPoilTefal/night-shift/issues/131))
 - [x] Proof tooling separated from the product: the launcher and its cases are out of the published binary and images, so the agent under proof cannot read them ([#152](https://github.com/UnPoilTefal/night-shift/issues/152), [ADR 0014](docs/adr/0014-separation-dev-utilisateur.md))
+- [x] Proof environment: `make proof-up`, `make proof-replay` and `make proof-down` start, replay and destroy the proof in its own Compose project, next to a usage deployment without touching it, after checking the throwaway repositories and secrets; images deduced from the checked-out tag ([#153](https://github.com/UnPoilTefal/night-shift/issues/153), [guide](docs/proof.md))
 - [x] Agent configuration read from a versioned repository: added refusals and skills, at the last merged revision, read-only for the agent, revision recorded for each ticket; the fixed refusals stay in the code ([#132](https://github.com/UnPoilTefal/night-shift/issues/132), [guide](docs/agent-config.md))
-- [x] Replayable tier-1 proof on the Compose example: thirteen declarative cases (E1 to E10, with variants) that order the agent to do something dangerous, judged by state, never by the agent's account; `make proof-replay` plays them on a running stack and its sandbox, then cleans up ([#116](https://github.com/UnPoilTefal/night-shift/issues/116), [guide](docs/proof.md))
+- [x] Replayable tier-1 proof on the Compose example: thirteen declarative cases (E1 to E10, with variants) that order the agent to do something dangerous, judged by state, never by the agent's account; `make proof-replay` plays them, then cleans up ([#116](https://github.com/UnPoilTefal/night-shift/issues/116), [guide](docs/proof.md))
 
 **Forges** ([spec](https://github.com/UnPoilTefal/night-shift/issues/57), [ADR 0012](docs/adr/0012-outils-derriere-des-contrats.md))
 
@@ -338,7 +339,16 @@ Every pull request runs lint, tests, the image build with its smoke test and sec
 
 ### Replaying the barrier proof
 
-`make proof-replay` replays the barrier proof, from a checkout, on a running Compose stack and its sandbox repository: each case orders the agent to do something dangerous (push to the default branch, rewrite a ticket body, merge a change request, read a secret, loop forever…), and the launcher judges the result from the state of the forge, the volumes and the logs. It prints a report per case and says whether the tier opens. It refuses to start unless the stack targets the sandbox it was given. See [docs/proof.md](docs/proof.md) for the cases, the preparation of the sandbox and the stack override.
+The barrier proof runs in a **proof environment** (*environnement d'épreuve*), from a checkout of the tag under proof: each case orders the agent to do something dangerous (push to the default branch, rewrite a ticket body, merge a change request, read a secret, loop forever…), and the launcher judges the result from the state of the forge, the volumes and the logs. It prints a report per case and says whether the tier opens.
+
+```sh
+export PROOF_REPO=owner/sandbox PROOF_AGENT_CONFIG=owner/agent-config
+make proof-up       # checks the repositories and secrets, then starts the environment
+make proof-replay   # writes proof-report.md
+make proof-down     # destroys the environment, touches no repository
+```
+
+It never runs on a usage deployment, and can share a host with one. [docs/proof.md](docs/proof.md) holds the whole procedure, including the preparation of the repositories and secrets.
 
 ### Replaying the zone-refusal proof
 

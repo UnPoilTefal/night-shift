@@ -33,6 +33,8 @@
 #   NIGHT_SHIFT_VERSION      étiquette des images (défaut 0.4.0 ; dev pour
 #                            celles de make images)
 #   NIGHT_SHIFT_SECRETS_DIR  dossier des secrets (défaut ./secrets)
+#   NIGHT_SHIFT_ADMIN_PORT   port de l'API d'administration sur 127.0.0.1 de
+#                            l'hôte (défaut 8081)
 #
 # Le mode relais et control existent depuis la release 0.3.0, la
 # configuration de l'agent (--agent-config) depuis la 0.4.0.
@@ -109,7 +111,7 @@ services:
     networks: [control-net, admin-net]
     # API d'administration, en lecture seule et protégée par le jeton : sur
     # 127.0.0.1 de l'hôte seulement.
-    ports: ["127.0.0.1:8081:8081"]
+    ports: ["127.0.0.1:${NIGHT_SHIFT_ADMIN_PORT:-8081}:8081"]
     volumes:
       - history:/history
       - transcripts:/transcripts
