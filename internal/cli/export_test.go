@@ -68,5 +68,3 @@ func AddForge(t testing.TB, name, tokenEnv, apiURL, gitURL string, open func(api
 	t.Cleanup(func() { forges = previous })
 }
 
-// SecretEnv expose la lecture d'un secret, par sa variable ou son fichier.
-var SecretEnv = secretEnv

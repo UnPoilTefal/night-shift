@@ -1,4 +1,6 @@
-package cli
+// Package proofcli est le lanceur de l'épreuve des barrières, un outil de
+// développement (ADR 0014) : le paquet cli ne doit jamais l'importer.
+package proofcli
 
 import (
 	"context"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/UnPoilTefal/night-shift/internal/cli"
 	"github.com/UnPoilTefal/night-shift/internal/proof"
 	"github.com/UnPoilTefal/night-shift/internal/proof/stack"
 	"github.com/UnPoilTefal/night-shift/internal/version"
@@ -20,25 +23,25 @@ import (
 // ciPaths est la définition de CI de chaque forge, que pose le cas E9.
 var ciPaths = map[string]string{"github": ".github/workflows/proof.yml", "gitlab": ".gitlab-ci.yml"}
 
-// runProof rejoue l'épreuve des barrières (#116) sur une stack Compose déjà
+// Run rejoue l'épreuve des barrières (#116) sur une stack Compose déjà
 // lancée et sur son dépôt jetable. Code de sortie : 0 si le palier s'ouvre,
 // 1 sinon ou en cas d'incident, 2 pour un usage incorrect.
-func runProof(args []string, stdout, stderr io.Writer) int {
+func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "replay" {
-		_, _ = fmt.Fprintln(stderr, "usage : night-shift proof replay --repo <dépôt jetable> --compose-file <fichier>… [options]")
+		_, _ = fmt.Fprintln(stderr, "usage : night-shift-proof replay --repo <dépôt jetable> --compose-file <fichier>… [options]")
 		return 2
 	}
 	fs := flag.NewFlagSet("proof replay", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", "", "dépôt jetable de l'épreuve, celui de la stack ; jamais un dépôt réel")
-	ff := addForgeFlags(fs, true)
+	ff := cli.AddForgeFlags(fs, true)
 	project := fs.String("compose-project", "night-shift", "nom du projet Compose de la stack")
-	var files repoList
+	var files cli.RepoList
 	fs.Var(&files, "compose-file", "fichier Compose de la stack, répétable, dans l'ordre de docker compose")
 	image := fs.String("image", "ghcr.io/unpoiltefal/night-shift:"+version.Version, "image night-shift qui lit et écrit les volumes de la stack")
 	adminURL := fs.String("admin-url", "http://127.0.0.1:8081", "API d'administration de control")
 	tier := fs.String("tier", "1", "palier rejoué")
-	var only repoList
+	var only cli.RepoList
 	fs.Var(&only, "case", "cas à rejouer (E1, E2′…), répétable ; tous par défaut")
 	blocked := fs.String("blocked-host", "example.com", "hôte hors de la liste blanche du proxy de sortie (E5)")
 	passTimeout := fs.Duration("pass-timeout", 45*time.Minute, "durée maximale d'une passe")
@@ -64,18 +67,18 @@ func runProof(args []string, stdout, stderr io.Writer) int {
 		}
 		cases = slices.DeleteFunc(cases, func(c proof.Case) bool { return !slices.Contains(only, c.ID) })
 	}
-	f, token, ok := ff.open("proof replay", stderr, *repo)
+	f, token, ok := ff.Open("proof replay", stderr, *repo)
 	if !ok {
 		return 2
 	}
 	sb, ok := f.(stack.Forge)
 	if !ok {
-		_, _ = fmt.Fprintf(stderr, "proof replay : l'adaptateur %s ne sait pas administrer un dépôt jetable\n", ff.name)
+		_, _ = fmt.Fprintf(stderr, "proof replay : l'adaptateur %s ne sait pas administrer un dépôt jetable\n", ff.Name())
 		return 2
 	}
-	adminToken, err := secretEnv(ControlTokenEnv)
+	adminToken, err := cli.SecretEnv(cli.ControlTokenEnv)
 	if err != nil || adminToken == "" {
-		_, _ = fmt.Fprintf(stderr, "proof replay : %s (ou %s%s) doit porter le jeton de l'API d'administration de control\n", ControlTokenEnv, ControlTokenEnv, FileSuffix)
+		_, _ = fmt.Fprintf(stderr, "proof replay : %s (ou %s%s) doit porter le jeton de l'API d'administration de control\n", cli.ControlTokenEnv, cli.ControlTokenEnv, cli.FileSuffix)
 		return 2
 	}
 
@@ -83,14 +86,14 @@ func runProof(args []string, stdout, stderr io.Writer) int {
 	for _, file := range files {
 		compose = append(compose, "--file", file)
 	}
-	ctx, stop := signalContext()
+	ctx, stop := cli.SignalContext()
 	defer stop()
 	if err := stackTargets(ctx, compose, *repo); err != nil {
 		_, _ = fmt.Fprintf(stderr, "proof replay : %v\n", err)
 		return 2
 	}
 	t := stack.New(stack.Config{
-		Repo: *repo, Forge: sb, Token: token, CIPath: ciPaths[ff.name],
+		Repo: *repo, Forge: sb, Token: token, CIPath: ciPaths[ff.Name()],
 		Compose: compose, Project: *project, Image: *image,
 		AdminURL: *adminURL, AdminToken: adminToken, BlockedHost: *blocked,
 		PassTimeout: *passTimeout, Log: stderr,

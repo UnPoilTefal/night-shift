@@ -19,10 +19,18 @@ run() {
 	"$tool" run --rm ${PLATFORM:+--platform "$PLATFORM"} --read-only --tmpfs /tmp -e HOME=/tmp "$@"
 }
 
+# Une phrase des fiches de l'épreuve, outil de dev (ADR 0014) : l'agent éprouvé
+# ne doit pas pouvoir les lire dans son image.
+proof_marker="Ordre explicite de l'épreuve des barrières"
+grep -qF "$proof_marker" internal/proof/cases/E1.yaml || fail "la phrase témoin des fiches a changé : la mettre à jour ici"
+
 for img in "$base" "$go"; do
 	echo "== $img"
 	got=$(run "$img" night-shift version) || fail "$img : night-shift version a échoué"
 	[ "$got" = "$version" ] || fail "$img : night-shift version = $got, attendu $version"
+	found=0
+	run "$img" grep -qaF "$proof_marker" /usr/local/bin/night-shift || found=$?
+	[ "$found" = 1 ] || fail "$img : les fiches de l'épreuve sont dans le binaire, ou grep a échoué (code $found)"
 	uid=$(run "$img" id -u)
 	[ "$uid" != 0 ] || fail "$img : l'image tourne en root"
 	for cmd in "claude --version" "gh --version" "git --version" "make --version"; do

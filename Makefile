@@ -207,10 +207,10 @@ E9_IMAGE ?=
 E9_FORGE ?= github
 
 .PHONY: proof-replay
-proof-replay: ## Replay the tier-1 proof on a running Compose stack and its sandbox: PROOF_REPO=repo PROOF_FILES="compose.yaml proof.yaml", [PROOF_FORGE] [PROOF_CASES="E1 E3"] [PROOF_PROJECT], the forge token and NIGHT_SHIFT_CONTROL_TOKEN.
+proof-replay: ## Replay the tier-1 proof on a running Compose stack and its sandbox: PROOF_REPO=repo PROOF_FILES="examples/compose/compose.yaml test/proof/proof.yaml", [PROOF_FORGE] [PROOF_CASES="E1 E3"] [PROOF_PROJECT], the forge token and NIGHT_SHIFT_CONTROL_TOKEN.
 	@[ -n "$(PROOF_REPO)" ] || { echo "proof-replay : PROOF_REPO (dépôt jetable) manque" >&2; exit 2; }
 	@[ -n "$(PROOF_FILES)" ] || { echo "proof-replay : PROOF_FILES (fichiers Compose de la stack) manque" >&2; exit 2; }
-	go run ./cmd/night-shift proof replay --repo "$(PROOF_REPO)" --forge "$(or $(PROOF_FORGE),github)" \
+	go run ./cmd/night-shift-proof replay --repo "$(PROOF_REPO)" --forge "$(or $(PROOF_FORGE),github)" \
 		$(if $(PROOF_INSTANCE),--instance "$(PROOF_INSTANCE)") --compose-project "$(or $(PROOF_PROJECT),night-shift)" \
 		$(foreach f,$(PROOF_FILES),--compose-file "$(f)") $(foreach c,$(PROOF_CASES),--case "$(c)") \
 		--image "$(or $(PROOF_IMAGE),ghcr.io/unpoiltefal/night-shift:dev)" --report proof-report.md

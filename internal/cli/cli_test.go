@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"bytes"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -57,5 +58,26 @@ func TestUnknownCommandFails(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "frobnicate") {
 		t.Fatalf("stderr = %q, attendu le nom de la commande inconnue", stderr)
+	}
+}
+
+// L'épreuve est un outil de développement (ADR 0014) : ses fiches ne doivent
+// pas entrer dans le binaire que lit l'agent éprouvé.
+func TestPublishedBinaryLeavesTheProofOut(t *testing.T) {
+	code, _, stderr := run("proof", "replay")
+	if code != 2 || !strings.Contains(stderr, "commande inconnue") {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(stderr, "proof ") {
+		t.Fatalf("l'aide cite encore proof : %q", stderr)
+	}
+	out, err := exec.Command("go", "list", "-deps", "github.com/UnPoilTefal/night-shift/cmd/night-shift").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dep := range strings.Fields(string(out)) {
+		if strings.Contains(dep, "/internal/proof") {
+			t.Fatalf("le binaire publié dépend de %s", dep)
+		}
 	}
 }

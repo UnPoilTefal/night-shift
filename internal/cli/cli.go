@@ -19,7 +19,6 @@ Commandes :
   weekly    issue hebdomadaire par dépôt : Résultats lus sur la forge, taux de délégation, palier (jeton de forge)
   zones     check des zones sur le diff d'une PR d'agent
   control   service de contrôle hors Kubernetes : déclenche les passes, relaie les étapes, tient l'historique
-  proof     rejoue l'épreuve des barrières sur une stack Compose et son dépôt jetable (jeton de forge)
 `
 
 // Run exécute la commande désignée par args (sans le nom du binaire) et rend
@@ -48,8 +47,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runZones(args[1:], stdout, stderr)
 	case "control":
 		return runControl(args[1:], stdout, stderr)
-	case "proof":
-		return runProof(args[1:], stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "commande inconnue : %q\n\n%s", args[0], usage)
 		return 2
