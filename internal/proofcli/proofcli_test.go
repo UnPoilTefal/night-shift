@@ -5,32 +5,31 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/UnPoilTefal/night-shift/internal/cli"
 	"github.com/UnPoilTefal/night-shift/internal/proofcli"
 )
 
-const secret = "ghp_cli-secret-token"
-
-func run(args ...string) (code int, stdout, stderr string) {
+func run(args ...string) (code int, stderr string) {
 	var out, errOut bytes.Buffer
 	code = proofcli.Run(args, &out, &errOut)
-	return code, out.String(), errOut.String()
+	return code, errOut.String()
 }
 
-func TestProofReplayUsageErrors(t *testing.T) {
-	t.Setenv(cli.TokenEnv, secret)
-	t.Setenv(cli.ControlTokenEnv, "control-token")
+func TestUsageErrors(t *testing.T) {
 	for name, tc := range map[string]struct {
 		args []string
 		want string
 	}{
-		"sans sous-commande":   {nil, "night-shift-proof replay"},
-		"sans dépôt":           {[]string{"replay", "--compose-file", "c.yaml"}, "--repo"},
-		"sans fichier Compose": {[]string{"replay", "--repo", "o/sandbox"}, "--compose-file"},
-		"cas inconnu":          {[]string{"replay", "--repo", "o/sandbox", "--compose-file", "c.yaml", "--case", "E42"}, "E42"},
+		"sans commande":                  {nil, "night-shift-proof <commande>"},
+		"commande inconnue":              {[]string{"rm"}, "commande inconnue"},
+		"sans dépôt":                     {[]string{"up", "--agent-config", "o/conf"}, "--repo"},
+		"sans configuration":             {[]string{"replay", "--repo", "o/sandbox"}, "--agent-config"},
+		"deux fois le dépôt":             {[]string{"up", "--repo", "o/a", "--agent-config", "o/a"}, "deux dépôts"},
+		"cas inconnu":                    {[]string{"replay", "--repo", "o/a", "--agent-config", "o/b", "--case", "E42"}, "E42"},
+		"le projet n'est pas une option": {[]string{"up", "--compose-project", "night-shift"}, "compose-project"},
+		"ni les fichiers":                {[]string{"replay", "--compose-file", "c.yaml"}, "compose-file"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			code, _, stderr := run(tc.args...)
+			code, stderr := run(tc.args...)
 			if code != 2 || !strings.Contains(stderr, tc.want) {
 				t.Fatalf("code = %d, stderr = %q", code, stderr)
 			}
@@ -38,11 +37,10 @@ func TestProofReplayUsageErrors(t *testing.T) {
 	}
 }
 
-func TestProofReplayNeedsTheControlToken(t *testing.T) {
-	t.Setenv(cli.TokenEnv, secret)
-	t.Setenv(cli.ControlTokenEnv, "")
-	code, _, stderr := run("replay", "--repo", "o/sandbox", "--compose-file", "c.yaml")
-	if code != 2 || !strings.Contains(stderr, cli.ControlTokenEnv) {
+func TestDockerHostIsRefused(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "ssh://prete")
+	code, stderr := run("up", "--repo", "o/a", "--agent-config", "o/b")
+	if code != 2 || !strings.Contains(stderr, "DOCKER_HOST") {
 		t.Fatalf("code = %d, stderr = %q", code, stderr)
 	}
 }

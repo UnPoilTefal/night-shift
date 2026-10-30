@@ -102,7 +102,7 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 # images $(IMAGE_VERSION) construites par make images, contre une fausse
 # forge lancée sur l'hôte. Docker Engine 28 ou plus.
 .PHONY: test-compose
-test-compose: images ## Run the Compose example end-to-end (ten scenarios). Expects Docker Engine 28+.
+test-compose: images ## Run the Compose example end-to-end (eleven scenarios). Expects Docker Engine 28+.
 	NIGHT_SHIFT_E2E_VERSION=$(IMAGE_VERSION) go test -tags=compose ./test/compose/ -v -count=1 -timeout 20m
 
 .PHONY: cleanup-test-e2e
@@ -206,14 +206,23 @@ E9_IMAGE ?=
 
 E9_FORGE ?= github
 
+# Options communes de l'environnement d'épreuve. Son nom de projet et son
+# dossier de secrets sont fixés par l'outil, et aucune variable ne les change.
+PROOF_ENV = --repo "$(PROOF_REPO)" --agent-config "$(PROOF_AGENT_CONFIG)" --forge "$(or $(PROOF_FORGE),github)" \
+	$(if $(PROOF_INSTANCE),--instance "$(PROOF_INSTANCE)") $(if $(PROOF_IMAGE),--image "$(PROOF_IMAGE)") \
+	$(if $(PROOF_ADMIN_PORT),--admin-port "$(PROOF_ADMIN_PORT)")
+
+.PHONY: proof-up
+proof-up: ## Check the preconditions and start the proof environment: PROOF_REPO=sandbox PROOF_AGENT_CONFIG=repo, [PROOF_FORGE] [PROOF_INSTANCE] [PROOF_IMAGE] [PROOF_ADMIN_PORT]. See docs/proof.md.
+	go run ./cmd/night-shift-proof up $(PROOF_ENV)
+
 .PHONY: proof-replay
-proof-replay: ## Replay the tier-1 proof on a running Compose stack and its sandbox: PROOF_REPO=repo PROOF_FILES="examples/compose/compose.yaml test/proof/proof.yaml", [PROOF_FORGE] [PROOF_CASES="E1 E3"] [PROOF_PROJECT], the forge token and NIGHT_SHIFT_CONTROL_TOKEN.
-	@[ -n "$(PROOF_REPO)" ] || { echo "proof-replay : PROOF_REPO (dépôt jetable) manque" >&2; exit 2; }
-	@[ -n "$(PROOF_FILES)" ] || { echo "proof-replay : PROOF_FILES (fichiers Compose de la stack) manque" >&2; exit 2; }
-	go run ./cmd/night-shift-proof replay --repo "$(PROOF_REPO)" --forge "$(or $(PROOF_FORGE),github)" \
-		$(if $(PROOF_INSTANCE),--instance "$(PROOF_INSTANCE)") --compose-project "$(or $(PROOF_PROJECT),night-shift)" \
-		$(foreach f,$(PROOF_FILES),--compose-file "$(f)") $(foreach c,$(PROOF_CASES),--case "$(c)") \
-		--image "$(or $(PROOF_IMAGE),ghcr.io/unpoiltefal/night-shift:dev)" --report proof-report.md
+proof-replay: ## Replay the tier-1 proof in the proof environment, same options as proof-up, [PROOF_CASES="E1 E3"]; writes proof-report.md.
+	go run ./cmd/night-shift-proof replay $(PROOF_ENV) $(foreach c,$(PROOF_CASES),--case "$(c)") --report proof-report.md
+
+.PHONY: proof-down
+proof-down: ## Destroy the proof environment (containers, volumes, networks); touches no repository.
+	go run ./cmd/night-shift-proof down $(if $(PROOF_ADMIN_PORT),--admin-port "$(PROOF_ADMIN_PORT)")
 
 .PHONY: e9-replay
 e9-replay: ## Replay the zone-refusal proof (E9) on a sandbox: E9_REPO=repo E9_IMAGE=image, [E9_FORGE=github|gitlab] [E9_INSTANCE=url], and the forge token.

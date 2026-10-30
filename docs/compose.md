@@ -13,7 +13,7 @@ The Docker daemon supervises everything (`restart: unless-stopped`). There is no
 
 A static test ([`compose_test.go`](../examples/compose/compose_test.go)) checks `compose.yaml`, `squid.conf` and the allow-lists. It needs no Docker. It fails on any change that weakens a guarantee, and on any step option the binary does not know.
 
-An end-to-end test ([`test/compose`](../test/compose/compose_test.go), `make test-compose`) runs the real stack in CI against a fake GitLab started on the host, with a fake agent in place of Claude Code. Its override, [`compose.test.yaml`](../test/compose/compose.test.yaml), only lets the trusted steps reach that fake forge, and the static rules are applied to the merged configuration too. It plays ten scenarios: a full pass, a second round after red CI, a zone refusal, a network probe from the agents' network, the secrets, a hostile agent that tries to leave files and a process behind, an agent that forges its end, three manual requests during a pass, the transcript archive ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)), and part of the barrier proof replayed by its launcher ([#116](https://github.com/UnPoilTefal/night-shift/issues/116), [guide](proof.md)).
+An end-to-end test ([`test/compose`](../test/compose/compose_test.go), `make test-compose`) runs the real stack in CI against a fake GitLab started on the host, with a fake agent in place of Claude Code. Its override, [`compose.test.yaml`](../test/compose/compose.test.yaml), only lets the trusted steps reach that fake forge, and the static rules are applied to the merged configuration too. It plays eleven scenarios: a full pass, a second round after red CI, a zone refusal, a network probe from the agents' network, the secrets, a hostile agent that tries to leave files and a process behind, an agent that forges its end, three manual requests during a pass, the transcript archive ([#111](https://github.com/UnPoilTefal/night-shift/issues/111)), part of the barrier proof replayed by its launcher ([#116](https://github.com/UnPoilTefal/night-shift/issues/116), [guide](proof.md)), and a proof environment started and destroyed next to the stack ([#153](https://github.com/UnPoilTefal/night-shift/issues/153)).
 
 ## Requirements
 
@@ -38,7 +38,7 @@ The networks keep each service to what it needs:
 - **`agent-net`** is internal, with no address on the host. The agents can only reach the proxy, and the proxy only lets `CONNECT` through to port 443 of the domains in its lists. An agent resolves no public name, and reaches neither `control` nor any host service.
 - **`trusted-net`** is a normal network: the trusted steps reach the forge and Discord directly.
 - **`control-net`** is internal. It links `control` to the trusted steps only, and the steps API has no authentication of its own.
-- **`admin-net`** carries a single published port: `127.0.0.1:8081` on the host, `control`'s read-only administration API. Docker publishes no port for a container attached only to internal networks (observed on Docker Desktop 29.9), which is why `control` has this extra network.
+- **`admin-net`** carries a single published port: `127.0.0.1:8081` by default on the host, `control`'s read-only administration API. Docker publishes no port for a container attached only to internal networks (observed on Docker Desktop 29.9), which is why `control` has this extra network.
 
 The agents have no persistent volume. Their `HOME`, their `CLAUDE_CONFIG_DIR` and their `/tmp` are `tmpfs`, and the agent empties them after each round. It runs as PID 1 (`init: false`) and kills every other process it started. Transcripts reach the `transcripts` volume only through `publish`.
 
@@ -57,6 +57,7 @@ Compose reads these variables from the environment or from a `.env` file next to
 | `NIGHT_SHIFT_SCHEDULE` | `0 2 * * *` | Cron schedule of the passes, in UTC |
 | `NIGHT_SHIFT_VERSION` | `0.4.0` | Tag of the `night-shift` and `night-shift-go` images |
 | `NIGHT_SHIFT_SECRETS_DIR` | `./secrets` | Directory of the secret files |
+| `NIGHT_SHIFT_ADMIN_PORT` | `8081` | Port of the administration API on the host's `127.0.0.1` |
 
 On GitLab, for example:
 
