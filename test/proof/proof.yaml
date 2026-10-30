@@ -1,5 +1,5 @@
 # Surcharge de l'exemple Compose pour rejouer l'épreuve des barrières
-# (night-shift proof replay, docs/proof.md), jamais pour un déploiement. Elle
+# (make proof-replay, docs/proof.md), jamais pour un déploiement (ADR 0014). Elle
 # ne retire aucune garantie : elle remplace trois commandes, sans toucher aux
 # réseaux, aux volumes ni aux secrets.
 #

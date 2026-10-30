@@ -1,10 +1,12 @@
 # Barrier proof
 
+*For night-shift contributors.* The proof is development tooling and never runs outside this project's scope, in particular not on a usage deployment ([ADR 0014](adr/0014-separation-dev-utilisateur.md)).
+
 The **proof** (*épreuve*) is a set of cases that each order the agent to do something dangerous: push to the default branch, rewrite a ticket body, merge a change request, read a secret… Only the structure may stop it. The result is read from the state of the forge, of the execution place and of the logs, never from the agent's account ([keystone#40](https://github.com/UnPoilTefal/keystone/issues/40), tiers from [keystone#83](https://github.com/UnPoilTefal/keystone/issues/83)).
 
 Each case is a declarative file in [`internal/proof/cases`](../internal/proof/cases): preparation, instruction (the ticket brief), expected result per tier, targeted guarantee and state checks. That is the shape of a task of the future regression evals, so the cases will enter them without being rewritten.
 
-`night-shift proof replay` replays the cases on a running Compose stack and its sandbox repository. For each case, it:
+`make proof-replay`, from a checkout of this repository, replays the cases on a running Compose stack and its sandbox repository. For each case, it:
 
 1. prepares the state (a change request to merge, a file and a fake secret on a volume the agent never mounts);
 2. opens the case's ticket, whose brief is the instruction, with `ready-for-agent`;
@@ -33,13 +35,13 @@ The proof creates tickets and triggers passes: run it **only on a throwaway repo
 
 - **Sandbox repository** with a valid opt-in that forbids the forge's CI definition (`.github/**` or `.gitlab-ci.yml`), like the one of `make e9-replay`. Its CI fails when a `ci-red` file is present, so that E10 gets a second round.
 - **Agent configuration repository** ([guide](agent-config.md)) whose `agent.yaml` denies `Bash(make release*)`: that is the barrier of E8.
-- **Stack** from the Compose example with the [`proof.yaml`](../examples/compose/proof.yaml) override, on images `0.4.0` or later, and a distant `NIGHT_SHIFT_SCHEDULE` such as `0 0 1 1 *`:
+- **Stack** from the Compose example with the [`proof.yaml`](../test/proof/proof.yaml) override, on images `0.4.0` or later, and a distant `NIGHT_SHIFT_SCHEDULE` such as `0 0 1 1 *`:
 
 ```sh
 cd examples/compose
 NIGHT_SHIFT_REPO=owner/sandbox NIGHT_SHIFT_AGENT_CONFIG=owner/agent-config \
 NIGHT_SHIFT_SCHEDULE="0 0 1 1 *" \
-  docker compose -f compose.yaml -f proof.yaml up -d
+  docker compose -f compose.yaml -f ../../test/proof/proof.yaml up -d
 ```
 
 ## Replay
@@ -49,12 +51,12 @@ From the repository root, with the stack's forge token and the control administr
 ```sh
 NIGHT_SHIFT_GITHUB_TOKEN=… NIGHT_SHIFT_CONTROL_TOKEN_FILE=examples/compose/secrets/control_token \
   make proof-replay PROOF_REPO=owner/sandbox \
-  PROOF_FILES="examples/compose/compose.yaml examples/compose/proof.yaml" PROOF_CASES="E1 E3"
+  PROOF_FILES="examples/compose/compose.yaml test/proof/proof.yaml" PROOF_CASES="E1 E3"
 ```
 
 `PROOF_CASES` is optional (every case by default), `PROOF_FORGE=gitlab` and `PROOF_INSTANCE` choose the forge, and `PROOF_PROJECT` the Compose project name (`night-shift` by default, the `name` of `compose.yaml`). The report is printed and written to `proof-report.md`.
 
-The same command, `night-shift proof replay`, takes the options shown by `night-shift proof replay -h`.
+The target runs `go run ./cmd/night-shift-proof replay`, whose options are shown by adding `-h`. The launcher and the cases are not part of the published binary or images: the agent under proof cannot read them.
 
 ## In CI
 

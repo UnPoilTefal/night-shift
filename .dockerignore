@@ -9,9 +9,6 @@
 !**/*.go
 **/*_test.go
 
-# Re-include files embedded in the binary (go:embed)
-!internal/proof/cases/*.yaml
-
 # Re-include Go module files
 !go.mod
 !go.sum
