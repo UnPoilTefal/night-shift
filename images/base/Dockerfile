@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
 # l'agent les invoque sans espace de noms (/implement).
 FROM --platform=$BUILDPLATFORM node:26.12.1-trixie-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS skills
 # renovate: datasource=github-tags depName=mattpocock/skills
-ARG MATTPOCOCK_SKILLS_VERSION=v1.3.1
+ARG MATTPOCOCK_SKILLS_VERSION=v1.3.2
 ADD https://github.com/mattpocock/skills.git#${MATTPOCOCK_SKILLS_VERSION} /src
 RUN node -e ' \
 	const fs = require("fs"), path = require("path"); \
