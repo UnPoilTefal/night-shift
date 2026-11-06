@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
 # Skills mattpocock, installées comme skills gérées : HOME et
 # CLAUDE_CONFIG_DIR, fixés par le déploiement, ne les masquent pas, et
 # l'agent les invoque sans espace de noms (/implement).
-FROM --platform=$BUILDPLATFORM node:26.12.1-trixie-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS skills
+FROM --platform=$BUILDPLATFORM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS skills
 # renovate: datasource=github-tags depName=mattpocock/skills
 ARG MATTPOCOCK_SKILLS_VERSION=v1.3.1
 ADD https://github.com/mattpocock/skills.git#${MATTPOCOCK_SKILLS_VERSION} /src
@@ -30,7 +30,7 @@ RUN node -e ' \
 	for (const s of skills) fs.cpSync(path.join("/src", s), path.join("/out", path.basename(s)), { recursive: true }); \
 	'
 
-FROM --platform=$BUILDPLATFORM node:26.12.1-trixie-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS gh
+FROM --platform=$BUILDPLATFORM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS gh
 ARG TARGETARCH
 # renovate: datasource=github-releases depName=cli/cli extractVersion=^v(?<version>.*)$
 ARG GH_VERSION=2.103.3
@@ -41,7 +41,7 @@ RUN echo "$(grep " gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz$" /tmp/checksums.
 	&& tar -xzf /tmp/gh.tar.gz -C /tmp \
 	&& install -D -m 0755 /tmp/gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh /out/gh
 
-FROM node:26.12.1-trixie-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec
+FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_CODE_VERSION=2.1.311
 RUN apt-get update \
